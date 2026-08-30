@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">Иконка телесуфлёра</title>
+  <rect width="512" height="512" rx="112" fill="#0b0d12"/>
+  <path d="M88 256h132M292 256h132" stroke="#f4f1ea" stroke-opacity=".52" stroke-width="12" stroke-linecap="round"/>
+  <circle cx="256" cy="256" r="26" fill="#ffb15a"/>
+  <circle cx="256" cy="256" r="52" fill="none" stroke="#ffb15a" stroke-opacity=".18" stroke-width="12"/>
+</svg>

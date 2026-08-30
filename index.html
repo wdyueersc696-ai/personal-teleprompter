@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#0b0d12">
+    <meta name="color-scheme" content="dark light">
+    <meta name="description" content="Личный офлайн-телесуфлёр для Reels, Shorts и видео.">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Суфлёр">
+    <title>Телесуфлёр</title>
+    <link rel="manifest" href="./manifest.webmanifest">
+    <link rel="apple-touch-icon" href="./icons/icon-180.png">
+    <link rel="icon" href="./icons/icon-192.png">
+    <script>
+      window.teleprompterSWReady = 'serviceWorker' in navigator
+        ? navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).catch(() => null)
+        : Promise.resolve(null);
+    </script>
+    <link rel="stylesheet" href="./styles.css">
+    <script type="module" src="./js/app.js"></script>
+  </head>
+  <body data-theme="dark">
+    <main id="app" class="app-shell">
+      <section id="setup-view" class="setup-view" aria-labelledby="setup-title">
+        <div class="setup-wrap">
+          <header class="masthead">
+            <a class="brand" href="./" aria-label="Телесуфлёр — на главную">
+              <span class="brand-mark" aria-hidden="true"><span></span></span>
+              <span>Телесуфлёр</span>
+            </a>
+            <span id="connection-badge" class="connection-badge" aria-live="polite">
+              <span aria-hidden="true"></span>
+              <span>Локально</span>
+            </span>
+          </header>
+
+          <div class="intro">
+            <p class="eyebrow">Личный режиссёрский монитор</p>
+            <h1 id="setup-title">Текст в фокусе.</h1>
+            <p>Вставьте сценарий, настройте темп и начинайте читать. Текст остаётся на этом устройстве.</p>
+          </div>
+
+          <div class="script-editor">
+            <div class="section-heading">
+              <label for="script-input">Сценарий</label>
+              <div class="script-metrics" aria-live="polite">
+                <span id="word-count">0 слов</span>
+                <span aria-hidden="true">/</span>
+                <span id="reading-time">00:00</span>
+              </div>
+            </div>
+            <textarea
+              id="script-input"
+              rows="11"
+              placeholder="Вставьте текст сценария…"
+              spellcheck="false"
+              autocomplete="off"
+            ></textarea>
+            <p class="save-note"><span id="save-indicator">Сохраняется только на устройстве</span></p>
+          </div>
+
+          <section class="settings" aria-labelledby="settings-title">
+            <div class="section-heading settings-heading">
+              <h2 id="settings-title">Темп и экран</h2>
+              <span>Минимум настроек</span>
+            </div>
+
+            <div class="setting-row">
+              <div class="setting-copy">
+                <label for="speed-input">Скорость</label>
+                <span>Слов в минуту</span>
+              </div>
+              <div class="range-control">
+                <button type="button" class="step-button" data-action="speed-down" aria-label="Уменьшить скорость">−</button>
+                <input id="speed-input" type="range" min="50" max="400" step="5" value="150">
+                <button type="button" class="step-button" data-action="speed-up" aria-label="Увеличить скорость">+</button>
+                <output id="speed-output" for="speed-input">150 WPM</output>
+              </div>
+            </div>
+
+            <div class="setting-row">
+              <div class="setting-copy">
+                <label for="font-input">Размер текста</label>
+                <span>Во время чтения</span>
+              </div>
+              <div class="range-control">
+                <input id="font-input" type="range" min="28" max="96" step="2" value="52">
+                <output id="font-output" for="font-input">52 px</output>
+              </div>
+            </div>
+
+            <div class="setting-row">
+              <div class="setting-copy">
+                <label for="line-height-input">Высота строки</label>
+                <span>Воздух между строками</span>
+              </div>
+              <div class="range-control">
+                <input id="line-height-input" type="range" min="1.1" max="2.2" step="0.05" value="1.45">
+                <output id="line-height-output" for="line-height-input">1.45</output>
+              </div>
+            </div>
+
+            <div class="setting-row">
+              <div class="setting-copy">
+                <label for="width-input">Ширина текста</label>
+                <span>Уже — меньше движения глаз</span>
+              </div>
+              <div class="range-control">
+                <input id="width-input" type="range" min="50" max="100" step="2" value="86">
+                <output id="width-output" for="width-input">86%</output>
+              </div>
+            </div>
+
+            <fieldset class="setting-row setting-choice">
+              <legend>
+                <span>Отсчёт</span>
+                <small>Перед движением</small>
+              </legend>
+              <div class="segmented" aria-label="Задержка перед стартом">
+                <label><input type="radio" name="countdown" value="0"><span>Выкл.</span></label>
+                <label><input type="radio" name="countdown" value="3" checked><span>3 сек.</span></label>
+                <label><input type="radio" name="countdown" value="5"><span>5 сек.</span></label>
+              </div>
+            </fieldset>
+
+            <fieldset class="setting-row setting-choice">
+              <legend>
+                <span>Тема</span>
+                <small>Для всего интерфейса</small>
+              </legend>
+              <div class="segmented" aria-label="Цветовая тема">
+                <label><input type="radio" name="theme" value="dark" checked><span>Тёмная</span></label>
+                <label><input type="radio" name="theme" value="light"><span>Светлая</span></label>
+              </div>
+            </fieldset>
+
+            <div class="toggle-row">
+              <label class="switch-control">
+                <span><strong>Зеркало</strong><small>Для телесуфлёрного стекла</small></span>
+                <input id="mirror-input" type="checkbox" role="switch">
+                <i aria-hidden="true"></i>
+              </label>
+              <label class="switch-control">
+                <span><strong>Фокус-зона</strong><small>Центральная линия чтения</small></span>
+                <input id="focus-input" type="checkbox" role="switch" checked>
+                <i aria-hidden="true"></i>
+              </label>
+            </div>
+          </section>
+
+          <div class="launch-block">
+            <button id="start-button" type="button" class="start-button">
+              <span>Запустить суфлёр</span>
+              <span aria-hidden="true">↗</span>
+            </button>
+            <p>Экран займёт суфлёр. Для съёмки используйте вторую камеру, другое устройство или физическое стекло.</p>
+          </div>
+
+          <aside id="install-hint" class="install-hint" hidden>
+            <strong>На iPhone удобнее с главного экрана</strong>
+            <span>Safari → Поделиться → «На экран “Домой”».</span>
+          </aside>
+        </div>
+      </section>
+
+      <section id="reader-view" class="reader-view" data-phase="idle" aria-label="Режим чтения" hidden>
+        <div id="reader-stage" class="reader-stage">
+          <div id="reader-scroll" class="reader-scroll" tabindex="-1">
+            <article id="reader-text" class="reader-text" aria-live="off"></article>
+          </div>
+
+          <div id="focus-overlay" class="focus-overlay" aria-hidden="true">
+            <span class="fade fade-top"></span>
+            <span class="focus-gate"><i></i><b></b><i></i></span>
+            <span class="fade fade-bottom"></span>
+          </div>
+
+          <div id="countdown-overlay" class="countdown-overlay" role="status" aria-live="assertive" hidden>
+            <span id="countdown-value">3</span>
+          </div>
+
+          <header class="reader-topbar reader-controls" data-reader-controls>
+            <button id="back-button" type="button" class="icon-button text-button" aria-label="Вернуться к сценарию">← Текст</button>
+            <div class="reader-status">
+              <span id="phase-label" role="status" aria-live="polite" aria-atomic="true">Готов</span>
+              <span id="time-label">00:00 / 00:00</span>
+            </div>
+            <div class="top-actions">
+              <span id="progress-label" class="progress-label">0%</span>
+              <button id="fullscreen-button" type="button" class="icon-button" aria-label="Полный экран" title="Полный экран (F)">⛶</button>
+            </div>
+          </header>
+
+          <div class="reader-bottom reader-controls" data-reader-controls>
+            <label class="timeline-label" for="progress-input">Позиция</label>
+            <input id="progress-input" class="timeline" type="range" min="0" max="1000" step="1" value="0">
+
+            <div class="transport" aria-label="Управление чтением">
+              <button id="seek-back-button" type="button" class="transport-button" aria-label="Назад на 5 секунд">−5с</button>
+              <button id="play-button" type="button" class="play-button" aria-label="Пуск" aria-pressed="false">
+                <span id="play-icon" aria-hidden="true">▶</span>
+                <span id="play-label">Пуск</span>
+              </button>
+              <button id="seek-forward-button" type="button" class="transport-button" aria-label="Вперёд на 5 секунд">+5с</button>
+              <button id="restart-button" type="button" class="transport-button restart-button" aria-label="Начать сначала">↺</button>
+            </div>
+
+            <div class="quick-settings">
+              <div class="quick-step" aria-label="Скорость чтения">
+                <button type="button" data-action="reader-speed-down" aria-label="Уменьшить скорость">−</button>
+                <output id="reader-speed-output">150</output>
+                <button type="button" data-action="reader-speed-up" aria-label="Увеличить скорость">+</button>
+                <span>WPM</span>
+              </div>
+              <div class="quick-step" aria-label="Размер текста">
+                <button type="button" data-action="reader-font-down" aria-label="Уменьшить текст">A−</button>
+                <output id="reader-font-output">52</output>
+                <button type="button" data-action="reader-font-up" aria-label="Увеличить текст">A+</button>
+              </div>
+              <button id="reader-mirror-button" type="button" class="mode-button" aria-pressed="false">Зеркало</button>
+              <button id="reader-focus-button" type="button" class="mode-button" aria-pressed="true">Фокус</button>
+            </div>
+          </div>
+
+        </div>
+      </section>
+    </main>
+
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+    <div id="update-notice" class="update-notice" role="status" hidden>
+      <span>Доступна новая версия.</span>
+      <button id="update-button" type="button">Обновить</button>
+    </div>
+  </body>
+</html>

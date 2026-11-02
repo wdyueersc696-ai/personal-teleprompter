@@ -161,6 +161,7 @@ test('service worker activation deletes only older teleprompter caches', async (
         'teleprompter-shell-v4',
         'teleprompter-shell-v5',
         'teleprompter-shell-v6',
+        'teleprompter-shell-v7',
         'teleprompter-voice-models',
         'another-app-cache',
       ],
@@ -182,6 +183,7 @@ test('service worker activation deletes only older teleprompter caches', async (
     'teleprompter-shell-v3',
     'teleprompter-shell-v4',
     'teleprompter-shell-v5',
+    'teleprompter-shell-v6',
   ]);
 });
 

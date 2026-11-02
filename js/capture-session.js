@@ -164,9 +164,13 @@ export function createCaptureSession({
           // this constraint. The ordinary camera/recording path also works without it.
           if (needVideo && mediaDevices.getSupportedConstraints?.().zoom) {
             try {
-              acquired = await mediaDevices.getUserMedia({ ...constraints, video: { ...constraints.video, zoom: true } });
+              // A rear camera may advertise a wider zoom range. Prefer a selfie
+              // camera with zoom, then a regular selfie camera as below.
+              acquired = await mediaDevices.getUserMedia({
+                ...constraints, video: { ...constraints.video, facingMode: { exact: 'user' }, zoom: true },
+              });
             } catch (error) {
-              if (!current() || !['NotAllowedError', 'OverconstrainedError', 'TypeError', 'SecurityError'].includes(error?.name)) throw error;
+              if (!current() || !['NotAllowedError', 'NotFoundError', 'OverconstrainedError', 'TypeError', 'SecurityError'].includes(error?.name)) throw error;
             }
           }
           if (!acquired) acquired = await mediaDevices.getUserMedia(constraints);

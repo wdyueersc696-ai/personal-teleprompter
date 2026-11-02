@@ -49,32 +49,35 @@ function speechFixture(dir) {
   return wav;
 }
 
-// A symmetric red target of known width survives selfie mirroring. Its size
-// lets us compare the actual pixels in the viewfinder and the downloaded take.
+// The center target has a known width. Green marks on either side of the
+// 1× crop become visible at 0.5× if the wider source pixels are used.
 function cameraFixture(dir) {
   const file = path.join(dir, 'camera.y4m');
   command('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'color=c=royalblue:s=1280x720:r=30',
-    '-vf', 'drawbox=x=560:y=140:w=160:h=440:color=red:t=fill', '-frames:v', '4',
+    '-vf', ['drawbox=x=560:y=140:w=160:h=440:color=red:t=fill',
+      'drawbox=x=320:y=140:w=40:h=440:color=lime:t=fill',
+      'drawbox=x=920:y=140:w=40:h=440:color=lime:t=fill'].join(','), '-frames:v', '4',
     '-pix_fmt', 'yuv420p', '-f', 'yuv4mpegpipe', file]);
   return file;
 }
 
-function targetWidths(input, png = false) {
+function measureTargets(input, png = false) {
   const width = 180;
   const args = png ? ['-i', 'pipe:0'] : ['-i', input];
   const rows = command('ffmpeg', ['-v', 'error', ...args, '-an',
     '-vf', (png ? '' : 'fps=6,') + 'scale=180:320,format=rgb24,crop=180:1:0:160',
     '-f', 'rawvideo', 'pipe:1'], { input: png ? input : undefined, encoding: null }).stdout;
-  const sizes = [];
+  const frames = [];
   for (let row = 0; row + width * 3 <= rows.length; row += width * 3) {
-    let red = 0;
+    let red = 0, green = 0;
     for (let x = 0; x < width; x++) {
       const i = row + 3 * x;
       if (rows[i] > 160 && rows[i + 1] < 80 && rows[i + 2] < 80) red++;
+      if (rows[i] < 80 && rows[i + 1] > 160 && rows[i + 2] < 80) green++;
     }
-    sizes.push(red / width);
+    frames.push({ center: red / width, sides: green / width });
   }
-  return sizes;
+  return frames;
 }
 
 async function showTransport(page) {
@@ -94,31 +97,42 @@ async function downloadTake(page, directory) {
 }
 
 async function testZoom(page, dir) {
-  const widths = [];
+  const presets = page.locator('#camera-zoom button');
+  assert.deepEqual(await presets.evaluateAll(buttons => buttons.map(b => b.dataset.zoom).sort()), ['0.5', '1']);
+  const preview = [];
   await page.locator('#record-button').click();
   await page.locator('#record-indicator').waitFor({ state: 'visible' });
-  for (const [zoom, expected] of [['wide', 160 / 1280], ['1', 160 / 405], ['2', 320 / 405]]) {
+  for (const zoom of ['1', '0.5', '1']) {
     const button = page.locator('#camera-zoom button[data-zoom="' + zoom + '"]');
     await button.click();
     await page.waitForFunction(z => document.querySelector('[data-zoom="' + z + '"]')?.getAttribute('aria-pressed') === 'true', zoom);
     await page.waitForTimeout(500);
     const shot = await page.locator('.camera-frame').screenshot();
-    const [actual] = targetWidths(shot, true);
-    assert.ok(Math.abs(actual - expected) < .035, 'viewfinder target width at ' + zoom + ': ' + actual);
-    widths.push(actual);
+    const [frame] = measureTargets(shot, true);
+    // A 9:16 frame filled by a 1280×720 camera sees 405 source pixels at 1×.
+    assert.ok(Math.abs(frame.center - Number(zoom) * 160 / 405) < .02, 'unexpected target width at ' + zoom);
+    assert.ok(zoom === '0.5' ? frame.sides > .07 : frame.sides === 0, 'unexpected side marks at ' + zoom);
+    preview.push(frame);
   }
   await page.locator('#record-button').click();
   await page.locator('#record-indicator').waitFor({ state: 'hidden' });
   const file = await downloadTake(page, dir);
-  const encoded = targetWidths(file);
+  const encoded = measureTargets(file);
+  const exported = [];
   let from = 0;
-  for (const actual of widths) {
-    const i = encoded.findIndex((width, index) => index >= from && Math.abs(width - actual) < .035);
-    assert.ok(i >= 0, 'downloaded frames lack the preview zoom of ' + actual);
+  for (const sample of preview) {
+    const i = encoded.findIndex((frame, index) => index >= from
+      && Math.abs(frame.center - sample.center) < .02 && Math.abs(frame.sides - sample.sides) < .02);
+    assert.ok(i >= 0, 'export missing preview composition ' + JSON.stringify(sample));
+    exported.push(encoded[i]);
     from = i + 1;
   }
+  for (const frames of [preview, exported]) {
+    assert.ok(Math.abs(frames[1].center / frames[0].center - .5) < .04, '0.5× must halve the target width');
+    assert.ok(Math.abs(frames[2].center - frames[0].center) < .02, '1× must restore the opening composition');
+  }
   await page.locator('#take-close').click();
-  return widths;
+  return { preview, exported };
 }
 
 async function countCameraLines(page) {

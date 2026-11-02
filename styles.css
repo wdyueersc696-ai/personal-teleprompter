@@ -1120,14 +1120,18 @@ input[type="range"] {
   background: #101114;
 }
 .camera-preview {
+  position: absolute;
+  left: 50%;
+  top: 50%;
   display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: var(--camera-fit, cover);
-  object-position: center;
-  transform: scale(var(--camera-scale, 1));
+  width: var(--camera-image-width, 100%);
+  height: var(--camera-image-height, 100%);
+  max-width: none;
+  max-height: none;
+  object-fit: contain;
+  transform: translate(-50%, -50%);
 }
-.camera-preview.selfie { transform: scale(var(--camera-scale, 1)) scaleX(-1); }
+.camera-preview.selfie { transform: translate(-50%, -50%) scaleX(-1); }
 .has-camera .camera-only { display: inline-flex; }
 .has-camera .reader-only,
 .has-camera .reader-status,

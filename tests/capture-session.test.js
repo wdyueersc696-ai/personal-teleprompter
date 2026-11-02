@@ -204,7 +204,8 @@ test('a landscape sensor is center-cropped to 720 by 1280 and rotation cannot ch
   const [canvas] = canvases;
   const [rec] = recorders;
   assert.deepEqual([canvas.width, canvas.height], [720, 1280]);
-  assert.deepEqual(canvas.draws[0], [previewElement, 437.5, 0, 405, 720, 0, 0, 720, 1280]);
+  const coveredWidth = 1280 * (1280 / 720);
+  assert.deepEqual(canvas.draws[0], [previewElement, (720 - coveredWidth) / 2, 0, coveredWidth, 1280]);
   assert.equal(rec.stream.getVideoTracks()[0], canvas.track);
   assert.equal(rec.stream.getAudioTracks()[0], stream.getAudioTracks()[0]);
   previewElement.videoWidth = 900;
@@ -212,7 +213,7 @@ test('a landscape sensor is center-cropped to 720 by 1280 and rotation cannot ch
   const [id, paint] = frames.entries().next().value;
   frames.delete(id);
   paint();
-  assert.deepEqual(canvas.draws[1], [previewElement, 0, 100, 900, 1600, 0, 0, 720, 1280]);
+  assert.deepEqual(canvas.draws[1], [previewElement, 0, -80, 720, 1440]);
   const stop = session.stopRecording();
   rec.deliver();
   await stop;
@@ -233,24 +234,28 @@ test('recording waits for a decoded frame and never silently falls back to a lan
   await session.close();
 });
 
-test('wide reveals the original field and subsequent zooms change the same live recording and preview', async () => {
+test('0.5× halves subject size, reveals extra source pixels, and switches back during the same take', async () => {
   const { session, previewElement, calls, recorders, canvases, frames } = harness();
   await session.enableCamera();
-  await session.setZoom('wide');
+  for (const invalid of ['wide', 1.5, 2]) await assert.rejects(session.setZoom(invalid), /масштаб/);
+  await session.setZoom('0.5');
   session.startRecording();
   const [canvas] = canvases;
-  assert.equal(session.getState().zoomMode, 'fit');
-  assert.equal(previewElement.style['--camera-fit'], 'contain');
+  assert.equal(session.getState().zoom, 0.5);
+  assert.equal(session.getState().zoomMode, 'digital');
+  const halfWidth = 1280 * (1280 / 720) * 0.5;
+  assert.equal(parseFloat(previewElement.style['--camera-image-width']), halfWidth / 720 * 100);
+  assert.equal(previewElement.style['--camera-image-height'], '50%');
   assert.deepEqual(canvas.fills[0], [0, 0, 720, 1280]);
-  assert.deepEqual(canvas.draws[0], [previewElement, 0, 437.5, 720, 405]);
-  await session.setZoom('2');
+  assert.deepEqual(canvas.draws[0], [previewElement, (720 - halfWidth) / 2, 320, halfWidth, 640]);
+  await session.setZoom('1');
   const [id, paint] = frames.entries().next().value;
   frames.delete(id);
   paint();
   assert.equal(session.getState().zoomMode, 'digital');
-  assert.equal(previewElement.style['--camera-scale'], '2');
-  assert.equal(previewElement.style['--camera-fit'], 'cover');
-  assert.deepEqual(canvas.draws[1], [previewElement, 538.75, 180, 202.5, 360, 0, 0, 720, 1280]);
+  assert.equal(previewElement.style['--camera-image-height'], '100%');
+  assert.equal(canvas.draws[1][3], 2 * canvas.draws[0][3]);
+  assert.equal(canvas.draws[1][4], 2 * canvas.draws[0][4]);
   assert.equal(recorders.length, 1);
   assert.equal(calls.length, 1);
   const stopping = session.close();
@@ -258,22 +263,26 @@ test('wide reveals the original field and subsequent zooms change the same live 
   await stopping;
 });
 
-test('late video metadata enables fit and an uncropped 9:16 camera cannot falsely zoom out', async () => {
-  const { session, previewElement } = harness();
+test('uncropped 9:16 sources can use 0.5× with fields and keep that preset across metadata changes', async () => {
+  const { session, previewElement, canvases, recorders } = harness();
   previewElement.videoWidth = 0;
   await session.enableCamera();
-  assert.equal(session.getState().canWiden, false);
+  await session.setZoom(0.5);
   previewElement.videoWidth = 960;
   previewElement.videoHeight = 1280;
   previewElement.dispatchEvent(new Event('loadedmetadata'));
-  assert.equal(session.getState().canWiden, true);
-  await session.setZoom('wide');
+  assert.equal(previewElement.style['--camera-image-height'], '50%');
   previewElement.videoWidth = 720;
   previewElement.dispatchEvent(new Event('resize'));
-  assert.equal(session.getState().zoom, 1);
-  assert.equal(session.getState().canWiden, false);
-  await assert.rejects(session.setZoom('wide'), /весь доступный кадр/);
-  await session.close();
+  assert.equal(session.getState().zoom, 0.5);
+  assert.equal(previewElement.style['--camera-image-width'], '50%');
+  assert.equal(previewElement.style['--camera-image-height'], '50%');
+  session.startRecording();
+  assert.deepEqual(canvases[0].draws[0], [previewElement, 180, 320, 360, 640]);
+  assert.deepEqual(canvases[0].fills[0], [0, 0, 720, 1280]);
+  const closing = session.close();
+  recorders[0].deliver();
+  await closing;
 });
 
 test('device zoom is relative to its actual starting setting and rapid taps restore it', async () => {
@@ -293,19 +302,15 @@ test('device zoom is relative to its actual starting setting and rapid taps rest
   await session.enableCamera();
   previewElement.videoWidth = 720;
   previewElement.videoHeight = 1280;
-  assert.equal(session.getState().canWiden, true);
-  await session.setZoom('wide');
+  await session.setZoom(0.5);
   assert.equal(actual, 1);
   assert.equal(session.getState().zoomMode, 'device');
-  assert.equal(previewElement.style['--camera-fit'], 'cover');
-  await session.setZoom(2);
-  assert.equal(actual, 3);
-  assert.equal(Number(previewElement.style['--camera-scale']), 4 / 3);
-  await Promise.all([session.setZoom('wide'), session.setZoom(1)]);
+  assert.equal(previewElement.style['--camera-image-height'], '100%');
+  await Promise.all([session.setZoom(1), session.setZoom(0.5), session.setZoom(1)]);
   assert.equal(session.getState().zoom, 1);
-  assert.deepEqual(requested, [1, 3, 1, 2]);
+  assert.deepEqual(requested, [1, 2, 1, 2]);
   assert.equal(actual, 2);
-  assert.equal(previewElement.style['--camera-scale'], '1');
+  assert.equal(previewElement.style['--camera-image-height'], '100%');
   await session.close();
 });
 
@@ -328,14 +333,37 @@ test('ignored device constraints fall back to framing while rejected PTZ permiss
   await session.enableCamera();
   assert.equal(calls.length, 2);
   assert.equal(calls[0].video.zoom, true);
+  assert.deepEqual(calls[0].video.facingMode, { exact: 'user' });
   assert.equal(calls[1].video.zoom, undefined);
-  await session.setZoom('wide');
+  assert.deepEqual(calls[1].video.facingMode, { ideal: 'user' });
+  await session.setZoom(0.5);
   assert.equal(applied.length, 2);
-  assert.equal(session.getState().zoomMode, 'fit');
-  assert.equal(previewElement.style['--camera-fit'], 'contain');
-  await session.setZoom(1.5);
   assert.equal(session.getState().zoomMode, 'digital');
-  assert.equal(previewElement.style['--camera-scale'], '1.5');
+  assert.equal(previewElement.style['--camera-image-height'], '50%');
+  await session.setZoom(1);
+  assert.equal(previewElement.style['--camera-image-height'], '100%');
+  await session.close();
+});
+
+test('partial hardware widening is supplemented only by the remaining scale factor', async () => {
+  let actual = 2;
+  const video = Object.assign(new Track('video'), {
+    getCapabilities: () => ({ zoom: { min: 1.5, max: 3, step: 0.5 } }),
+    getSettings: () => ({ zoom: actual }),
+    async applyConstraints({ advanced }) { actual = advanced[0].zoom; },
+  });
+  const { session, previewElement } = harness({
+    mediaDevices: { getUserMedia: async () => new Stream([new Track('audio'), video]) },
+  });
+  await session.enableCamera();
+  await session.setZoom(0.5);
+  assert.equal(actual, 1.5);
+  assert.equal(session.getState().zoomMode, 'digital');
+  const renderFactor = parseFloat(previewElement.style['--camera-image-height']) / 100;
+  assert.ok(Math.abs((actual / 2) * renderFactor - 0.5) < 1e-9);
+  await session.setZoom(1);
+  assert.equal(actual, 2);
+  assert.equal(previewElement.style['--camera-image-height'], '100%');
   await session.close();
 });
 

@@ -23,20 +23,27 @@ export function createCameraFraming(source, changed) {
   let scale = 1;
   let queue = Promise.resolve();
 
-  function hasCroppedEdges() {
-    if (!source?.videoWidth || !source.videoHeight) return false;
-    const ratio = source.videoWidth / source.videoHeight;
-    return Math.abs(ratio / (OUTPUT_WIDTH / OUTPUT_HEIGHT) - 1) > 0.01;
+  // Size the full source before the output clips its edges. Scaling an already
+  // cropped 1× image would throw away peripheral pixels that fit at 0.5×.
+  function imageSize() {
+    const width = source?.videoWidth, height = source?.videoHeight;
+    if (!width || !height) return null;
+    const factor = Math.max(OUTPUT_WIDTH / width, OUTPUT_HEIGHT / height) * scale;
+    return { width: width * factor, height: height * factor };
   }
   function state() {
-    return { zoom, zoomMode: mode, canWiden: Boolean(track && (hasCroppedEdges() || (device && device.min < device.base))) };
+    return { zoom, zoomMode: mode };
+  }
+  function sizePreview() {
+    const size = imageSize();
+    source?.style?.setProperty('--camera-image-width', size ? size.width / OUTPUT_WIDTH * 100 + '%' : '100%');
+    source?.style?.setProperty('--camera-image-height', size ? size.height / OUTPUT_HEIGHT * 100 + '%' : '100%');
   }
   function apply(preset, nextMode, digitalScale) {
     zoom = preset;
     mode = nextMode;
     scale = digitalScale;
-    source?.style?.setProperty('--camera-fit', mode === 'fit' ? 'contain' : 'cover');
-    source?.style?.setProperty('--camera-scale', String(scale));
+    sizePreview();
   }
   function attach(nextTrack) {
     track = nextTrack;
@@ -46,7 +53,7 @@ export function createCameraFraming(source, changed) {
   }
   function refresh() {
     if (!track) return;
-    if (zoom === 'wide' && !state().canWiden) apply(1, 'digital', 1);
+    sizePreview();
     changed();
   }
   source?.addEventListener?.('loadedmetadata', refresh);
@@ -54,12 +61,10 @@ export function createCameraFraming(source, changed) {
 
   async function change(selected, preset) {
     if (selected !== track || !track || track.readyState !== 'live') return;
-    const wide = preset === 'wide';
-    if (wide && !state().canWiden) throw new Error('Камера уже показывает весь доступный кадр.');
     let factor = 1;
     if (device) {
       const { base, min, max, step } = device;
-      const requested = wide ? min : base * preset;
+      const requested = base * preset;
       let target = Math.min(max, Math.max(min, requested));
       if (step > 0 && target !== max && target !== base) {
         target = min + Math.floor((target - min) / step + 1e-6) * step;
@@ -74,40 +79,31 @@ export function createCameraFraming(source, changed) {
       }
       if (selected !== track || track.readyState !== 'live') return;
       factor = track.getSettings().zoom / base;
-      if (!Number.isFinite(factor) || factor <= 0 || factor > (wide ? 1 : preset) + 1e-4) {
-        throw new Error('Камера не применила выбранный масштаб. Попробуйте ещё раз.');
+      if (!Number.isFinite(factor) || factor <= 0) {
+        throw new Error('Камера не сообщила применённый масштаб. Попробуйте ещё раз.');
       }
     }
-    if (wide && factor >= 1 && !hasCroppedEdges()) {
-      throw new Error('Камера не предоставила более широкий угол.');
-    }
-    const fit = wide && factor >= 1;
-    const digitalScale = wide ? 1 : Math.max(1, preset / factor);
-    apply(preset, fit ? 'fit' : device && digitalScale < 1.0001 ? 'device' : 'digital', digitalScale);
+    const digitalScale = preset / factor;
+    apply(preset, device && Math.abs(digitalScale - 1) < 0.0001 ? 'device' : 'digital', digitalScale);
     changed();
   }
   function setZoom(value) {
-    const preset = value === 'wide' ? value : Number(value);
-    if (!['wide', 1, 1.5, 2].includes(preset)) return Promise.reject(new Error('Неизвестный масштаб камеры.'));
+    const preset = Number(value);
+    if (![0.5, 1].includes(preset)) return Promise.reject(new Error('Неизвестный масштаб камеры.'));
     const selected = track;
     const result = queue.then(() => change(selected, preset));
     queue = result.catch(() => {});
     return result;
   }
   function draw(context) {
-    const { videoWidth: width, videoHeight: height } = source;
-    if (source.readyState < 2 || !width || !height) return;
-    if (mode === 'fit') {
-      const fit = Math.min(OUTPUT_WIDTH / width, OUTPUT_HEIGHT / height);
-      const w = width * fit, h = height * fit;
+    const size = imageSize();
+    if (source.readyState < 2 || !size) return;
+    const { width, height } = size;
+    if (width < OUTPUT_WIDTH || height < OUTPUT_HEIGHT) {
       context.fillStyle = '#101114';
       context.fillRect(0, 0, OUTPUT_WIDTH, OUTPUT_HEIGHT);
-      context.drawImage(source, (OUTPUT_WIDTH - w) / 2, (OUTPUT_HEIGHT - h) / 2, w, h);
-      return;
     }
-    const cover = Math.max(OUTPUT_WIDTH / width, OUTPUT_HEIGHT / height) * scale;
-    const w = OUTPUT_WIDTH / cover, h = OUTPUT_HEIGHT / cover;
-    context.drawImage(source, (width - w) / 2, (height - h) / 2, w, h, 0, 0, OUTPUT_WIDTH, OUTPUT_HEIGHT);
+    context.drawImage(source, (OUTPUT_WIDTH - width) / 2, (OUTPUT_HEIGHT - height) / 2, width, height);
   }
 
   return { attach, state, setZoom, draw, width: OUTPUT_WIDTH, height: OUTPUT_HEIGHT };

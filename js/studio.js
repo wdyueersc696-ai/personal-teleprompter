@@ -117,7 +117,9 @@ export function createStudio({ view, viewport, article, pauseReading, resumeTemp
     preview.classList.toggle('selfie', mirroredPreview);
     if (state.camera) {
       const input = preview.videoWidth ? ' · Вход камеры ' + preview.videoWidth + '×' + preview.videoHeight : '';
-      id('capture-info').textContent = 'Файл 720×1280 · до 30 кадр/с' + input;
+      const framing = state.zoom !== 0.5 ? '' : state.zoomMode === 'device'
+        ? ' · 0,5× средствами камеры' : ' · 0,5× с программным масштабированием';
+      id('capture-info').textContent = 'Файл 720×1280 · до 30 кадр/с' + input + framing;
     }
     mirror.textContent = state.camera ? 'Зеркало превью' : 'Зеркало';
     mirror.setAttribute('aria-pressed', String(state.camera ? mirroredPreview : view.classList.contains('is-mirrored')));
@@ -141,7 +143,6 @@ export function createStudio({ view, viewport, article, pauseReading, resumeTemp
     toggle.disabled = view.classList.contains('no-script');
     for (const button of zoomControls.querySelectorAll('[data-zoom]')) {
       const preset = button.dataset.zoom;
-      button.hidden = preset === 'wide' && !state.canWiden;
       button.setAttribute('aria-pressed', String(preset === String(state.zoom)));
     }
     if (running && timer === null) {

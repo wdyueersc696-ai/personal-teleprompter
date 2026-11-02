@@ -1,5 +1,5 @@
 const CACHE_PREFIX = 'teleprompter-shell-';
-const CACHE_NAME = `${CACHE_PREFIX}v6`;
+const CACHE_NAME = `${CACHE_PREFIX}v7`;
 const MODEL_PATH = './vendor/vosk-model-small-ru-0.22.tar.gz';
 const APP_SHELL = [
   './',
@@ -38,11 +38,12 @@ self.addEventListener('install', (event) => {
 
 async function activate() {
   const names = await caches.keys();
-  if (names.includes('teleprompter-shell-v5')) {
-    // The voice engine is unchanged in v6. Keep it usable offline after updating.
+  const previousShell = ['teleprompter-shell-v6', 'teleprompter-shell-v5'].find(name => names.includes(name));
+  if (previousShell) {
+    // These releases share the same pinned voice engine. Keep it available offline.
     for (const asset of ['./vendor/vosk-0.0.8-mobile.js', './vendor/vosk-worker-0.0.8-mobile.js']) {
       try {
-        const cached = await caches.match(asset, { cacheName: 'teleprompter-shell-v5', ignoreSearch: true });
+        const cached = await caches.match(asset, { cacheName: previousShell, ignoreSearch: true });
         if (cached) await (await caches.open(CACHE_NAME)).put(asset, cached);
       } catch { /* Optional assets can be downloaded again online. */ }
     }

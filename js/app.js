@@ -277,7 +277,7 @@ function showControls({ autoHide = true } = {}) {
     panel.inert = false;
     panel.removeAttribute('aria-hidden');
   });
-  if (autoHide && presenting()) {
+  if (autoHide && presenting() && !elements.readerView.classList.contains('has-camera')) {
     controlsTimer = window.setTimeout(hideControls, 2_800);
   }
 }
@@ -288,7 +288,7 @@ function presenting() {
 
 function hideControls() {
   window.clearTimeout(controlsTimer);
-  if (!presenting()) return;
+  if (!presenting() || elements.readerView.classList.contains('has-camera')) return;
   elements.readerView.classList.add('controls-hidden');
   studio?.setControlsHidden(true);
   readerControlPanels.forEach((panel) => {
@@ -328,7 +328,7 @@ function renderReaderState(state) {
 
 function enterReader(withCamera = false) {
   const script = elements.scriptInput.value;
-  if (!script.trim()) {
+  if (!withCamera && !script.trim()) {
     showToast('Сначала вставьте текст сценария.', { error: true });
     elements.scriptInput.focus();
     return;
@@ -337,6 +337,7 @@ function enterReader(withCamera = false) {
   replaceState({ ...appState, script }, { save: false });
   persistNow();
   elements.readerText.textContent = appState.script;
+  studio.render();
   elements.setupView.hidden = true;
   elements.readerView.hidden = false;
   scrollEngine.pause();

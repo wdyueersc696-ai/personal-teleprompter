@@ -60,7 +60,68 @@ test('recognition uses the given stream, groups partial/final updates and releas
   assert.equal(f.source.disconnected, true);
   assert.equal(f.models[0].worker.terminated, true);
   assert.equal(f.context.state, 'closed');
-  assert.deepEqual(f.statuses, ['loading', 'listening', 'off']);
+  assert.deepEqual(f.statuses, ['loading', 'microphone', 'listening', 'off']);
+});
+
+test('a suspended audio route after microphone permission gets another resume request', async () => {
+  const f = fixture();
+  let requests = 0;
+  f.context.resume = async () => { if (++requests === 2) f.context.state = 'running'; };
+  f.input.prepare();
+  f.context.state = 'interrupted';
+  await f.input.start(f.stream);
+  assert.equal(requests, 2);
+  assert.equal(f.statuses.at(-1), 'microphone');
+  f.processor.port.onmessage({ data: { epoch: 1, pcm: new Float32Array(4096) } });
+  assert.equal(f.statuses.at(-1), 'listening');
+  f.input.stop();
+});
+
+test('model progress is reported separately from actual sound input', async () => {
+  const f = fixture({ deferModel: true });
+  const pending = f.input.start(f.stream);
+  await new Promise(resolve => setImmediate(resolve));
+  const model = f.models[0];
+  model.emit('progress', { state: 'downloading', detail: { loaded: 512, total: 1024, cached: false } });
+  model.emit('progress', { state: 'initializing', detail: {} });
+  model.ready = true;
+  model.emit('load', { result: true });
+  await pending;
+  assert.deepEqual(f.statuses, ['loading', 'downloading', 'initializing', 'microphone']);
+  f.input.stop();
+});
+
+test('a muted input can return to listening without interrupting recording', async () => {
+  const f = fixture();
+  await f.input.start(f.stream);
+  const pcm = new Float32Array(4096);
+  for (let i = 0; i < 47; i++) {
+    f.processor.port.onmessage({ data: { epoch: 1, pcm } });
+    f.recognizers[0].emit('partialresult', { result: { partial: '' } });
+  }
+  assert.equal(f.statuses.at(-1), 'quiet');
+  pcm[17] = 0.1;
+  f.processor.port.onmessage({ data: { epoch: 1, pcm } });
+  assert.equal(f.statuses.at(-1), 'listening');
+  assert.equal(f.track.readyState, 'live');
+  f.input.stop();
+});
+
+test('explicit warm stop disconnects audio immediately and reuses the model on the next toggle', async () => {
+  const f = fixture();
+  await f.input.start(f.stream);
+  f.input.stop({ keepModel: true });
+  assert.equal(f.track.readyState, 'live');
+  assert.equal(f.source.disconnected, true);
+  assert.equal(f.recognizers[0].removed, true);
+  assert.notEqual(f.models[0].worker.terminated, true);
+  f.context.state = 'running'; // fixture reuses a context object for its fresh graph
+  await f.input.start(f.stream);
+  assert.equal(f.models.length, 1);
+  assert.equal(f.recognizers.length, 2);
+  f.input.stop({ keepModel: true });
+  f.input.stop();
+  assert.equal(f.models[0].worker.terminated, true);
 });
 
 test('seeking discards stale PCM and interim/final results without restarting the microphone or model', async () => {

@@ -4,9 +4,16 @@ const processorUrl = new URL('./speech-processor.js', import.meta.url).href;
 const modelUrl = new URL('../vendor/vosk-model-small-ru-0.22.tar.gz', import.meta.url).href;
 const localModelError = 'Не удалось открыть русскую модель. При первом включении нужны интернет и свободная память.';
 const unsupportedError = 'В этом браузере недоступно локальное распознавание речи.';
+const micError = 'Нет звука от микрофона. Проверьте доступ к нему и нажмите кнопку голоса ещё раз.';
+let libraryFailures = 0;
 
 async function loadLibrary() {
-  await import('../vendor/vosk-0.0.8.js');
+  const url = new URL('../vendor/vosk-0.0.8-mobile.js', import.meta.url);
+  // A failed module fetch may stay in this document's module map. A fresh
+  // request allows retrying after restoring the connection without a reload.
+  if (libraryFailures) url.searchParams.set('retry', libraryFailures);
+  try { await import(url.href); }
+  catch (error) { libraryFailures++; throw error; }
   return globalThis.Vosk;
 }
 
@@ -29,6 +36,14 @@ export function createSpeechInput({
 }) {
   let current = null;
   let segment = 0;
+  let retained = null;
+  let releaseTimer;
+
+  function releaseRetained() {
+    clearTimeout(releaseTimer);
+    retained?.worker.terminate();
+    retained = null;
+  }
 
   // Call within the button gesture, before waiting on getUserMedia permissions.
   function prepare() {
@@ -39,11 +54,13 @@ export function createSpeechInput({
     current = { context, resumed, cancel: new AbortController(), starting: false, epoch: 0 };
   }
 
-  function stop() {
+  function stop({ keepModel = false } = {}) {
     const session = current;
+    if (!keepModel) releaseRetained();
     if (!session) return;
     current = null;
     session.cancel.abort();
+    clearTimeout(session.deadline);
     session.context.onstatechange = null;
     session.track?.removeEventListener('ended', session.lostTrack);
     session.source?.disconnect();
@@ -52,10 +69,16 @@ export function createSpeechInput({
       session.processor.port.close();
       session.processor.disconnect();
     }
-    // Pinned vosk-browser 0.0.8's model.terminate() sends an async command
-    // that assumes a fully initialized model. Cancel the owning dedicated
-    // worker itself, also during a pending download or model initialization.
-    session.model?.worker.terminate();
+    // Upstream model.terminate() assumes initialization has finished.
+    // A pending worker can be terminated directly when loading is cancelled.
+    if (keepModel && session.model?.ready && session.recognizer) {
+      session.recognizer.remove();
+      releaseRetained();
+      retained = session.model;
+      releaseTimer = setTimeout(releaseRetained, 30_000);
+    } else {
+      session.model?.worker.terminate();
+    }
     void session.context.close().catch(() => {});
     onStatus('off');
   }
@@ -69,6 +92,30 @@ export function createSpeechInput({
       stop();
       onError(error);
     }
+  }
+
+  function watch(session, duration, message) {
+    clearTimeout(session.deadline);
+    session.deadline = setTimeout(() => fail(session, message), duration);
+  }
+
+  function bindModel(model) {
+    // Resolve the current owner for each event: a warmed model can be reused
+    // with a new AudioContext without keeping listeners for old sessions.
+    const modelFailed = ({ error } = {}) => {
+      if (retained === model) releaseRetained();
+      if (current?.model !== model) return;
+      const message = /^Не удалось (загрузить|открыть) русскую модель\./.test(error) ? error : localModelError;
+      fail(current, message);
+    };
+    model.on('error', modelFailed);
+    model.worker.addEventListener('error', modelFailed);
+    model.worker.addEventListener('messageerror', modelFailed);
+    model.on('progress', ({ state, detail }) => {
+      if (current?.model !== model || !current.starting) return;
+      watch(current, 60_000, state === 'downloading' ? 'Загрузка модели остановилась. Проверьте интернет и включите голос ещё раз.' : localModelError);
+      onStatus(state, detail);
+    });
   }
 
   function resetSegment() {
@@ -114,28 +161,58 @@ export function createSpeechInput({
     session.track = track;
     session.lostTrack = () => fail(session, 'Микрофон отключён.');
     track.addEventListener('ended', session.lostTrack);
-    const deadline = setTimeout(() => fail(session, localModelError), 180_000);
     try {
       onStatus('loading');
-      const [vosk] = await Promise.race([interrupted, Promise.all([
-        loadVosk(), context.audioWorklet.addModule(processorUrl), session.resumed,
+      // iOS may interrupt the context when getUserMedia switches the audio
+      // route. Request resume again now that the capture track is live.
+      const resume = context.state === 'running' ? session.resumed : context.resume();
+      watch(session, 8_000, micError);
+      await Promise.race([interrupted, Promise.all([
+        resume.catch(() => { throw new Error(micError); }),
+        context.audioWorklet.addModule(processorUrl).catch(() => {
+          throw new Error('Не удалось запустить обработку микрофона. Обновите страницу и попробуйте снова.');
+        }),
       ])]);
-      if (session !== current) return;
-      const model = new vosk.Model(modelUrl, -2);
-      session.model = model;
-      model.on('error', () => fail(session, localModelError));
-      model.worker.addEventListener('error', () => fail(session, localModelError));
-      model.worker.addEventListener('messageerror', () => fail(session, localModelError));
-      await Promise.race([interrupted, new Promise((resolve, reject) => {
-        model.on('load', ({ result }) => result ? resolve() : reject(new Error(localModelError)));
-      })]);
+      if (context.state !== 'running') throw new Error(micError);
+      if (retained) {
+        clearTimeout(releaseTimer);
+        session.model = retained;
+        retained = null;
+      } else {
+        watch(session, 60_000, localModelError);
+        let vosk;
+        try { vosk = await Promise.race([interrupted, loadVosk()]); }
+        catch (error) { throw error.name === 'AbortError' ? error : new Error(localModelError); }
+        if (session !== current) return;
+        const model = new vosk.Model(modelUrl, -2);
+        session.model = model;
+        bindModel(model);
+        await Promise.race([interrupted, new Promise((resolve, reject) => {
+          model.on('load', ({ result }) => result ? resolve() : reject(new Error(localModelError)));
+        })]);
+      }
       if (session !== current) return;
       session.processor = openProcessor(context);
       session.source = context.createMediaStreamSource(stream);
       resetSegment();
       session.processor.onprocessorerror = () => fail(session, 'Ошибка обработки звука.');
+      let silentSamples = 0, reportedSilence = false;
       session.processor.port.onmessage = ({ data }) => {
         if (session !== current || data.epoch !== session.epoch) return;
+        if (!data.pcm?.length) return;
+        watch(session, 8_000, micError);
+        if (!session.hasInput) {
+          session.hasInput = true;
+          onStatus('listening');
+        }
+        // A muted input may still deliver uninterrupted, digital-zero PCM.
+        // Show that state without advancing the script or stopping a take.
+        silentSamples = data.pcm.some(sample => sample !== 0) ? 0 : silentSamples + data.pcm.length;
+        const quiet = silentSamples >= 4 * context.sampleRate;
+        if (reportedSilence !== quiet) {
+          reportedSilence = quiet;
+          onStatus(quiet ? 'quiet' : 'listening');
+        }
         // One reply per chunk. If inference cannot keep pace, don't build an
         // unbounded backlog and move the script to words read long ago.
         if (++session.pending * 4096 > context.sampleRate * 4) {
@@ -148,18 +225,17 @@ export function createSpeechInput({
           fail(session, 'Ошибка обработки звука.');
         }
       };
+      onStatus('microphone');
+      watch(session, 8_000, micError);
       session.source.connect(session.processor);
       session.processor.connect(context.destination);
       session.starting = false;
       context.onstatechange = () => {
-        if (context.state !== 'running') fail(session, 'Браузер приостановил обработку звука.');
+        if (context.state !== 'running') fail(session, 'Обработка звука приостановлена. Нажмите кнопку голоса ещё раз.');
       };
-      onStatus('listening');
     } catch (error) {
       if (current === session) stop();
       throw error;
-    } finally {
-      clearTimeout(deadline);
     }
   }
 

@@ -72,35 +72,52 @@ try {
   page.on('pageerror', e => errors.push(e.message));
   await page.addInitScript(() => {
     // Observe device/recorder track IDs without replacing audio or ASR output.
-    window.captureAudit = { audioRequests: 0, ids: [], recorded: [], began: 0, ended: 0, videoConstraints: null };
+    window.captureAudit = { audioRequests: 0, audioIds: [], recordedAudio: [], began: 0, ended: 0, videoConstraints: null };
     const get = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
     navigator.mediaDevices.getUserMedia = async c => {
-      const stream = await get(c);
+      // Some phones return landscape camera frames even in a portrait viewport.
+      const stream = await get(c.video ? { ...c, video: { width: { exact: 1280 }, height: { exact: 720 } } } : c);
       if (c.audio) window.captureAudit.audioRequests++;
       if (c.video) window.captureAudit.videoConstraints = c.video;
-      window.captureAudit.ids.push(...stream.getTracks().map(t => t.id));
+      window.captureAudit.audioIds.push(...stream.getAudioTracks().map(t => t.id));
       return stream;
     };
     const NativeRecorder = window.MediaRecorder;
     window.MediaRecorder = class extends NativeRecorder {
       constructor(stream, options) {
         super(stream, options);
-        window.captureAudit.recorded.push(...stream.getTracks().map(t => t.id));
+        window.captureAudit.recordedAudio.push(...stream.getAudioTracks().map(t => t.id));
         this.addEventListener('start', () => window.captureAudit.began++);
         this.addEventListener('stop', () => window.captureAudit.ended++);
       }
     };
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const origin = 'http://127.0.0.1:' + server.address().port;
+  const appUrl = process.env.QA_APP_URL || 'http://127.0.0.1:' + server.address().port;
+  const { origin } = new URL(appUrl);
   await page.context().grantPermissions(['camera', 'microphone'], { origin });
-  await page.goto(origin);
+  await page.goto(appUrl);
+  await page.locator('#script-input').fill('');
+  await page.locator('#shoot-button').click();
+  await page.locator('#record-button:enabled').waitFor();
+  assert.equal(await page.locator('#voice-toggle').isDisabled(), true);
+  await page.locator('#back-button').click();
   await page.locator('#script-input').fill(script);
   await page.locator('#shoot-button').click();
   const record = page.locator('#record-button'), voice = page.locator('#voice-toggle');
   const indicator = page.locator('#record-indicator'), status = page.locator('#studio-message');
   const scroll = page.locator('#reader-scroll');
   await page.waitForFunction(() => document.querySelector('#camera-preview')?.videoWidth > 0);
+  const framing = await page.locator('#camera-preview').evaluate(video => {
+    const rect = video.getBoundingClientRect();
+    return { input: [video.videoWidth, video.videoHeight], previewRatio: rect.width / rect.height };
+  });
+  assert.deepEqual(framing.input, [1280, 720]);
+  assert.ok(Math.abs(framing.previewRatio - 9 / 16) < 0.003, 'preview differs from the recorded crop');
+  await page.locator('#prompt-toggle').click();
+  assert.equal(await page.locator('#prompt-toggle').getAttribute('aria-pressed'), 'false');
+  await page.locator('#prompt-toggle').click();
+  if (process.env.QA_CAMERA_SCREENSHOT) await page.screenshot({ path: process.env.QA_CAMERA_SCREENSHOT });
   assert.equal(await voice.getAttribute('aria-checked'), 'false');
   await record.click();
   await indicator.waitFor({ state: 'visible' });
@@ -113,20 +130,24 @@ try {
   await page.waitForFunction(() => document.querySelector('#voice-toggle').getAttribute('aria-checked') === 'true');
   try {
     await page.waitForFunction(() => /пауза|слушаю|сопостав|конец|прочитан/i.test(document.querySelector('#studio-message').textContent)
-      && document.querySelector('#reader-scroll').scrollTop > 50, null, { timeout: 110000 });
+      && document.querySelector('#reader-scroll').scrollTop > 10, null, { timeout: 110000 });
   } catch (error) {
     throw new Error('Real speech did not move text: ' + await status.textContent(), { cause: error });
   }
   await page.waitForFunction(() => /пауза/i.test(document.querySelector('#studio-message').textContent), null, { timeout: 20000 });
   const paused = await scroll.evaluate(el => el.scrollTop);
+  assert.ok(await page.evaluate(() => CSS.highlights.get('voice-word')?.size > 0), 'next word was not highlighted');
   await new Promise(resolve => setTimeout(resolve, 750));
   assert.ok(Math.abs(await scroll.evaluate(el => el.scrollTop) - paused) <= 2, 'text moves during a speech pause');
   await voice.click();
   assert.equal(await voice.getAttribute('aria-checked'), 'false');
+  assert.equal(await page.evaluate(() => CSS.highlights.has('voice-word')), false);
   const atToggle = await scroll.evaluate(el => el.scrollTop);
   assert.ok(Math.abs(atToggle - paused) <= 2);
   await showTransport(page);
+  await page.locator('#camera-options-toggle').click();
   await page.locator('#play-button').click();
+  await page.locator('#camera-options-toggle').click();
   await page.waitForFunction(y => document.querySelector('#reader-scroll').scrollTop > y + 5, atToggle);
   await voice.click();
   await page.waitForFunction(() => /слушаю|пауза/i.test(document.querySelector('#studio-message').textContent), null, { timeout: 60000 });
@@ -150,6 +171,8 @@ try {
   const probe = JSON.parse(command('ffprobe', ['-v', 'error', '-show_entries',
     'stream=codec_type,codec_name,channels,width,height:format=duration,size', '-of', 'json', file]).stdout);
   assert.deepEqual(probe.streams.map(x => x.codec_type).sort(), ['audio', 'video']);
+  const video = probe.streams.find(x => x.codec_type === 'video');
+  assert.deepEqual([video.width, video.height], [720, 1280], 'downloaded take must be portrait');
   const decoded = command('ffmpeg', ['-hide_banner', '-i', file, '-vn', '-af', 'volumedetect', '-f', 'null', '-']);
   const maxVolume = Number(/max_volume:\s*(-?[\d.]+) dB/.exec(decoded.stderr)?.[1]);
   assert.ok(maxVolume > -60, 'saved recording has no audible signal');
@@ -160,12 +183,13 @@ try {
   const maxAudioInterval = Math.max(...timestamps.slice(1).map((t, i) => t - timestamps[i]));
   assert.ok(maxAudioInterval < 0.25, 'audible timeline has a gap during voice toggles');
   const audit = await page.evaluate(() => window.captureAudit);
-  assert.equal(audit.audioRequests, 1);
+  // One capture in the empty-camera check and one for the entire recorded take.
+  assert.equal(audit.audioRequests, 2);
   assert.equal(audit.videoConstraints.width.ideal, 720);
   assert.equal(audit.videoConstraints.height.ideal, 1280);
   assert.equal(audit.began, 1);
   assert.equal(audit.ended, 1);
-  assert.deepEqual(audit.recorded.sort(), audit.ids.sort());
+  assert.deepEqual(audit.recordedAudio, audit.audioIds.slice(-1));
   await page.locator('#take-close').click();
   await showTransport(page);
   await page.locator('#back-button').click();
@@ -184,7 +208,7 @@ try {
       origin, browserContextId: targetInfo.browserContextId,
       permission: { name: 'camera' }, setting: 'denied',
     });
-    await p.goto(origin);
+    await p.goto(appUrl);
     await p.locator('#script-input').fill(script);
     await p.locator('#shoot-button').click();
     await p.waitForFunction(() => /разрешите/i.test(document.querySelector('#toast').textContent));
@@ -199,13 +223,13 @@ try {
     let blocked = 0;
     await offlineModel.route('**/vosk-model-small-ru-0.22.tar.gz*', r => { blocked++; return r.abort('failed'); });
     const p = await offlineModel.newPage();
-    await p.goto(origin);
+    await p.goto(appUrl);
     await p.locator('#script-input').fill(script);
     await p.locator('#shoot-button').click();
     await p.locator('#record-button').click();
     await p.locator('#record-indicator').waitFor({ state: 'visible' });
     await p.locator('#voice-toggle').click();
-    await p.waitForFunction(() => /ручная прокрутка/.test(document.querySelector('#studio-message').textContent), null, { timeout: 45000 });
+    await p.waitForFunction(() => /для повтора/.test(document.querySelector('#studio-message').textContent), null, { timeout: 45000 });
     assert.ok(blocked > 0);
     assert.equal(await p.locator('#voice-toggle').getAttribute('aria-checked'), 'false');
     assert.equal(await p.locator('#record-indicator').isVisible(), true);

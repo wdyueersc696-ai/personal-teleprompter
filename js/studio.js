@@ -13,6 +13,8 @@ export function createStudio({ view, viewport, article, pauseReading, seek, fini
   const message = id('studio-message');
   const mirror = id('reader-mirror-button');
   const dock = view.querySelector('.studio-dock');
+  const promptToggle = id('prompt-toggle');
+  const optionsToggle = id('camera-options-toggle');
   let opening = false;
   let cameraEpoch = 0;
   let voiceEpoch = 0;
@@ -28,6 +30,7 @@ export function createStudio({ view, viewport, article, pauseReading, seek, fini
     if (voiceOn) stopVoice();
   } });
   const capture = createCaptureSession({
+    previewElement: preview,
     onChange: render,
     onResult(blob) {
       void library.add(blob);
@@ -48,9 +51,23 @@ export function createStudio({ view, viewport, article, pauseReading, seek, fini
     },
   });
   const speech = createSpeechInput({
-    onStatus(state) {
-      if (state === 'loading') message.textContent = 'Загружается русская модель. Первый запуск — около 52 МБ.';
-      if (state === 'listening') message.textContent = 'Слушаю. Начните читать текст.';
+    onStatus(state, detail = {}) {
+      toggle.dataset.state = state;
+      toggle.setAttribute('aria-busy', String(!['off', 'listening', 'quiet'].includes(state)));
+      if (state === 'off') return;
+      let label = {
+        loading: 'Загружаю распознавание…',
+        initializing: 'Подготавливаю русскую модель…',
+        microphone: 'Проверяю микрофон…',
+        listening: 'Слушаю. Читайте сценарий.',
+        quiet: 'Пока нет звука · скажите пару слов',
+      }[state];
+      if (state === 'downloading') {
+        const mb = Math.floor(detail.loaded / 1e6);
+        label = (detail.cached ? 'Открываю модель' : 'Загружаю модель') + ' · ' + mb
+          + (detail.total ? ' из ' + Math.round(detail.total / 1e6) : '') + ' МБ';
+      }
+      if (label && message.textContent !== label) message.textContent = label;
     },
     onResult({ text, final, segment }) {
       if (!voiceOn) return;
@@ -59,9 +76,9 @@ export function createStudio({ view, viewport, article, pauseReading, seek, fini
       const signature = segment + ' ' + text;
       if (!final && signature === heard) return;
       heard = signature;
-      message.textContent = result.matched ? 'Слушаю' : 'Не удалось сопоставить речь. Прочитайте несколько слов со строки.';
+      message.textContent = result.matched ? 'Слушаю' : 'Повторите несколько слов из текущей строки.';
       clearTimeout(quietTimer);
-      quietTimer = setTimeout(() => { if (voiceOn) message.textContent = 'Пауза. Продолжайте с текущей строки.'; }, 1600);
+      quietTimer = setTimeout(() => { if (voiceOn) message.textContent = 'Пауза · жду речь'; }, 1600);
     },
     onError: voiceFailed,
   });
@@ -69,11 +86,22 @@ export function createStudio({ view, viewport, article, pauseReading, seek, fini
   function updateClock() {
     id('record-clock').textContent = formatClock(capture.getState().elapsedMs);
   }
+  function setPromptVisible(visible) {
+    view.classList.toggle('prompt-hidden', !visible);
+    view.querySelector('.prompt-window').inert = !visible;
+    promptToggle.setAttribute('aria-pressed', String(visible));
+    promptToggle.title = visible ? 'Скрыть сценарий' : 'Показать сценарий';
+  }
+  function setOptionsOpen(open) {
+    view.classList.toggle('camera-settings-open', open);
+    optionsToggle.setAttribute('aria-expanded', String(open));
+  }
   function render(state = capture.getState()) {
     const active = state.recording !== 'idle';
     const running = state.recording === 'recording';
     const cameraChanged = view.classList.contains('has-camera') !== state.camera;
     view.classList.toggle('has-camera', state.camera);
+    view.classList.toggle('no-script', !article.textContent.trim());
     preview.hidden = !state.camera;
     const stream = state.camera ? state.stream : null;
     if (preview.srcObject !== stream) {
@@ -87,17 +115,22 @@ export function createStudio({ view, viewport, article, pauseReading, seek, fini
     mirror.setAttribute('aria-pressed', String(state.camera ? mirroredPreview : view.classList.contains('is-mirrored')));
     camera.setAttribute('aria-pressed', String(state.camera));
     camera.disabled = active;
+    id('camera-off').disabled = active;
     camera.textContent = opening ? 'Отменить запрос' : state.camera ? 'Выкл. камеру' : 'Камера';
     record.hidden = !state.camera && !active;
-    record.disabled = state.recording === 'stopping';
+    record.disabled = state.recording === 'stopping' || (!active && preview.readyState < 2);
     record.textContent = ({ starting: 'Отменить старт', recording: 'Остановить запись',
       stopping: 'Завершаю…', idle: 'Начать запись' })[state.recording];
+    record.setAttribute('aria-pressed', String(running));
+    record.setAttribute('aria-label', record.textContent);
+    record.title = record.textContent;
     id('record-indicator').hidden = !running;
     id('track-warning').textContent = (state.camera || active || voiceOn) && state.audioMuted
       ? 'Микрофон временно не передаёт звук.'
       : state.camera && state.videoMuted ? 'Камера временно не передаёт изображение.' : '';
     id('reader-takes').disabled = active;
     toggle.setAttribute('aria-checked', String(voiceOn));
+    toggle.disabled = view.classList.contains('no-script');
     if (running && timer === null) {
       updateClock();
       timer = setInterval(updateClock, 250);
@@ -105,8 +138,12 @@ export function createStudio({ view, viewport, article, pauseReading, seek, fini
       clearInterval(timer);
       timer = null;
     }
-    if (cameraChanged) follower.refresh();
-    if (wasPresenting !== (voiceOn || active)) {
+    if (cameraChanged) {
+      setPromptVisible(true);
+      setOptionsOpen(false);
+      follower.refresh();
+    }
+    if (cameraChanged || wasPresenting !== (voiceOn || active)) {
       wasPresenting = voiceOn || active;
       reveal();
     }
@@ -127,22 +164,23 @@ export function createStudio({ view, viewport, article, pauseReading, seek, fini
     finally { if (token === cameraEpoch) { opening = false; render(); } }
   }
 
-  function stopVoice() {
+  function stopVoice(keepModel = false) {
     ++voiceEpoch;
     voiceOn = false;
     heard = '';
     clearTimeout(quietTimer);
     follower.stop();
-    speech.stop();
+    speech.stop({ keepModel });
     capture.releaseVoice();
     message.textContent = '';
   }
   function voiceFailed(error) {
     stopVoice();
-    message.textContent = error.message + ' Доступна ручная прокрутка или кнопка «Пуск».';
+    toggle.dataset.state = 'error';
+    message.textContent = error.message + ' Нажмите кнопку голоса для повтора.';
   }
   async function toggleVoice() {
-    if (voiceOn) { stopVoice(); return; }
+    if (voiceOn) { stopVoice(true); return; }
     const token = ++voiceEpoch;
     voiceOn = true;
     pauseReading();
@@ -171,7 +209,19 @@ export function createStudio({ view, viewport, article, pauseReading, seek, fini
     return true;
   }
   camera.addEventListener('click', toggleCamera);
+  id('camera-off').addEventListener('click', toggleCamera);
+  preview.addEventListener('loadeddata', () => render());
+  preview.addEventListener('playing', () => render());
+  promptToggle.addEventListener('click', () => setPromptVisible(view.classList.contains('prompt-hidden')));
+  optionsToggle.addEventListener('click', () => setOptionsOpen(!view.classList.contains('camera-settings-open')));
+  view.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && view.classList.contains('camera-settings-open')) {
+      setOptionsOpen(false);
+      optionsToggle.focus();
+    }
+  });
   record.addEventListener('click', () => {
+    setOptionsOpen(false);
     if (busy()) void capture.stopRecording();
     else {
       try { capture.startRecording(); }

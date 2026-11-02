@@ -16,6 +16,23 @@ class Stream {
 
 function harness(options = {}) {
   const calls = [], recorders = [], results = [], errors = [];
+  const canvases = [];
+  const frames = new Map();
+  let nextFrame = 0;
+  const previewElement = {
+    videoWidth: 1280, videoHeight: 720, readyState: 4,
+    requestVideoFrameCallback(fn) { frames.set(++nextFrame, fn); return nextFrame; },
+    cancelVideoFrameCallback(id) { frames.delete(id); },
+  };
+  function makeCanvas() {
+    const canvas = {
+      track: new Track('video'), draws: [],
+      getContext() { return { drawImage: (...args) => this.draws.push(args) }; },
+      captureStream() { return new Stream([this.track]); },
+    };
+    canvases.push(canvas);
+    return canvas;
+  }
   let time = 100;
   class Recorder {
     static isTypeSupported(type) { return type.startsWith('video/webm'); }
@@ -29,7 +46,7 @@ function harness(options = {}) {
   }
   const session = createCaptureSession({
     now: () => time, onError: e => errors.push(e), onResult: b => results.push(b),
-    Recorder, Stream, mediaDevices: {
+    Recorder, Stream, previewElement, makeCanvas, mediaDevices: {
       async getUserMedia(constraints) {
         calls.push(constraints);
         const kinds = ['audio', 'video'].filter(kind => constraints[kind]);
@@ -38,7 +55,8 @@ function harness(options = {}) {
     },
     ...options,
   });
-  return { session, calls, recorders, results, errors, tick: () => { time += 1234; } };
+  return { session, calls, recorders, results, errors, canvases, frames, previewElement,
+    tick: () => { time += 1234; } };
 }
 
 test('front camera and mic are acquired together; elapsed time starts on actual start event', async () => {
@@ -47,7 +65,8 @@ test('front camera and mic are acquired together; elapsed time starts on actual 
   assert.deepEqual(calls.map(c => [c.audio, c.video.facingMode.ideal]), [[true, 'user']]);
   session.startRecording();
   const [rec] = recorders;
-  assert.equal(rec.stream, stream);
+  assert.equal(rec.stream.getAudioTracks()[0], stream.getAudioTracks()[0]);
+  assert.notEqual(rec.stream.getVideoTracks()[0], stream.getVideoTracks()[0]);
   assert.equal(session.getState().recording, 'starting');
   tick();
   assert.equal(session.getState().elapsedMs, 0);
@@ -175,6 +194,54 @@ test('mobile portrait requests upright framing without mandatory size or orienta
   await session.enableCamera();
   assert.deepEqual(calls[0].video, { facingMode: { ideal: 'user' }, width: { ideal: 720 }, height: { ideal: 1280 } });
   await session.close();
+});
+
+test('a landscape sensor is center-cropped to 720 by 1280 and rotation cannot change the encoded frame', async () => {
+  const { session, canvases, previewElement, frames, recorders } = harness();
+  const stream = await session.enableCamera();
+  session.startRecording();
+  const [canvas] = canvases;
+  const [rec] = recorders;
+  assert.deepEqual([canvas.width, canvas.height], [720, 1280]);
+  assert.deepEqual(canvas.draws[0], [previewElement, 437.5, 0, 405, 720, 0, 0, 720, 1280]);
+  assert.equal(rec.stream.getVideoTracks()[0], canvas.track);
+  assert.equal(rec.stream.getAudioTracks()[0], stream.getAudioTracks()[0]);
+  previewElement.videoWidth = 900;
+  previewElement.videoHeight = 1800;
+  const [id, paint] = frames.entries().next().value;
+  frames.delete(id);
+  paint();
+  assert.deepEqual(canvas.draws[1], [previewElement, 0, 100, 900, 1600, 0, 0, 720, 1280]);
+  const stop = session.stopRecording();
+  rec.deliver();
+  await stop;
+  assert.equal(canvas.track.readyState, 'ended');
+  assert.equal(frames.size, 0);
+  assert.ok(stream.getTracks().every(track => track.readyState === 'live'));
+  await session.close();
+});
+
+test('recording waits for a decoded frame and never silently falls back to a landscape take', async () => {
+  const { session, canvases, recorders, previewElement } = harness();
+  await session.enableCamera();
+  previewElement.readyState = 1;
+  assert.throws(() => session.startRecording(), /Дождитесь изображения/);
+  assert.equal(canvases.length, 0);
+  assert.equal(recorders.length, 0);
+  assert.equal(session.getState().camera, true);
+  await session.close();
+});
+
+test('encoder setup and start failures release the compositor without stopping preview or mic', async () => {
+  for (const Recorder of [class { constructor() { throw Error(); } }, class { start() { throw Error(); } }]) {
+    const { session, canvases, frames } = harness({ Recorder });
+    const stream = await session.enableCamera();
+    assert.throws(() => session.startRecording(), /запись/);
+    assert.equal(canvases[0].track.readyState, 'ended');
+    assert.equal(frames.size, 0);
+    assert.ok(stream.getTracks().every(track => track.readyState === 'live'));
+    await session.close();
+  }
 });
 
 test('temporary mute is visible, prevents a silent start, and does not break an active take', async () => {

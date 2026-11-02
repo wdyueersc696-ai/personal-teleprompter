@@ -79,15 +79,22 @@ test('service worker install precaches the complete runtime shell', async () => 
   let cachedAssets = [];
   const context = {
     URL,
+    Request,
     Promise,
     self: {
-      location: { origin: 'https://example.test' },
+      location: { href: 'https://example.test/prompt/sw.js', origin: 'https://example.test' },
       addEventListener: (type, listener) => listeners.set(type, listener),
       skipWaiting: async () => {},
       clients: { claim: async () => {} },
     },
     caches: {
-      open: async () => ({ addAll: async (assets) => { cachedAssets = [...assets]; } }),
+      open: async () => ({ addAll: async (requests) => {
+        cachedAssets = requests.map(request => {
+          assert.equal(request.cache, 'reload');
+          assert.ok(request.url.startsWith('https://example.test/prompt/'));
+          return './' + request.url.slice('https://example.test/prompt/'.length);
+        });
+      } }),
       keys: async () => [],
       delete: async () => true,
       match: async () => undefined,
@@ -115,7 +122,19 @@ test('service worker install precaches the complete runtime shell', async () => 
   }
   await checkImports('./js/app.js');
   assert.ok(cachedAssets.includes('./js/speech-processor.js'));
+  assert.ok(cachedAssets.includes('./js/speech-model-cache.js'));
   assert.ok(!cachedAssets.some(asset => asset.includes('vendor/')), 'the optional model must not delay installation');
+});
+
+test('the speech worker receives the model stream without a second service-worker cache write', async () => {
+  const listeners = new Map();
+  vm.runInNewContext(await readFile(path.join(projectRoot, 'sw.js'), 'utf8'), {
+    URL, self: { location: { origin: 'https://example.test' }, addEventListener: (name, fn) => listeners.set(name, fn) },
+  });
+  listeners.get('fetch')({
+    request: { method: 'GET', url: 'https://example.test/prompt/vendor/vosk-model-small-ru-0.22.tar.gz' },
+    respondWith() { assert.fail('model request was intercepted before reaching the loader'); },
+  });
 });
 
 test('service worker activation deletes only older teleprompter caches', async () => {
@@ -139,6 +158,8 @@ test('service worker activation deletes only older teleprompter caches', async (
         'teleprompter-shell-v2',
         'teleprompter-shell-v3',
         'teleprompter-shell-v4',
+        'teleprompter-shell-v5',
+        'teleprompter-voice-models',
         'another-app-cache',
       ],
       delete: async (name) => { deleted.push(name); return true; },
@@ -157,6 +178,7 @@ test('service worker activation deletes only older teleprompter caches', async (
     'teleprompter-shell-v1',
     'teleprompter-shell-v2',
     'teleprompter-shell-v3',
+    'teleprompter-shell-v4',
   ]);
 });
 

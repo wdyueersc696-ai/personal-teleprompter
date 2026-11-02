@@ -14,14 +14,24 @@ export function createVoiceScroll({ article, viewport, seek, onAnchor, onFinish 
     cancelAnimationFrame(frame);
     frame = 0;
   }
-  function lineAt(index) {
+  function wordRange(index) {
     const word = matcher.words[index];
     const node = article.firstChild;
-    if (!word || !node) return 0;
+    if (!word || !node) return null;
     const range = document.createRange();
     range.setStart(node, word.start);
     range.setEnd(node, word.end);
-    return range.getClientRects()[0]?.top ?? 0;
+    return range;
+  }
+  function lineAt(index) {
+    return wordRange(index)?.getClientRects()[0]?.top ?? 0;
+  }
+  function markWord(index) {
+    const highlights = globalThis.CSS?.highlights;
+    if (!highlights || !globalThis.Highlight) return;
+    const range = wordRange(index);
+    if (range) highlights.set('voice-word', new Highlight(range));
+    else highlights.delete('voice-word');
   }
   function atReadingLine() {
     if (!matcher.words.length) return 0;
@@ -36,7 +46,7 @@ export function createVoiceScroll({ article, viewport, seek, onAnchor, onFinish 
   }
   function align() {
     if (!matcher) return;
-    matcher.reset(atReadingLine());
+    markWord(matcher.reset(atReadingLine()));
     lastWord = null;
     onAnchor();
   }
@@ -65,6 +75,7 @@ export function createVoiceScroll({ article, viewport, seek, onAnchor, onFinish 
   viewport.addEventListener('wheel', userMoved, { passive: true });
 
   function goToWord(position) {
+    markWord(position);
     const distance = viewport.scrollHeight - viewport.clientHeight;
     const end = position >= matcher.words.length;
     if (distance <= 0) {
@@ -87,6 +98,7 @@ export function createVoiceScroll({ article, viewport, seek, onAnchor, onFinish 
     frame = requestAnimationFrame(tick);
   }
   function stop() {
+    globalThis.CSS?.highlights?.delete('voice-word');
     stopMotion();
     clearTimeout(manualTimer);
     manualTimer = 0;

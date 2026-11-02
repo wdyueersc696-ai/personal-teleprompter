@@ -20,10 +20,60 @@ function deviceError(error) {
   }
 }
 
+// Draw only the decoded camera image. Its intrinsic dimensions already include
+// presentation rotation; the centered crop matches object-fit: cover in a 9:16 preview.
+function portraitTrack(source, makeCanvas, onFrameError) {
+  if (!source || source.readyState < 2 || !source.videoWidth || !source.videoHeight) {
+    throw new Error('Дождитесь изображения с камеры и нажмите запись ещё раз.');
+  }
+  const canvas = makeCanvas();
+  canvas.width = 720;
+  canvas.height = 1280;
+  const context = canvas.getContext('2d', { alpha: false });
+  if (!context || !canvas.captureStream) throw new Error('Этот браузер не поддерживает вертикальную видеозапись.');
+  const [track] = canvas.captureStream(30).getVideoTracks();
+  if (!live(track)) throw new Error('Не удалось создать вертикальную видеодорожку.');
+  const useVideoFrames = typeof source.requestVideoFrameCallback === 'function';
+  let callback = null;
+
+  function draw() {
+    const { videoWidth: width, videoHeight: height } = source;
+    if (source.readyState < 2 || !width || !height) return;
+    const scale = Math.max(canvas.width / width, canvas.height / height);
+    const cropWidth = canvas.width / scale, cropHeight = canvas.height / scale;
+    context.drawImage(source, (width - cropWidth) / 2, (height - cropHeight) / 2,
+      cropWidth, cropHeight, 0, 0, canvas.width, canvas.height);
+  }
+  function schedule() {
+    callback = useVideoFrames ? source.requestVideoFrameCallback(next) : requestAnimationFrame(next);
+  }
+  function next() {
+    try { draw(); schedule(); }
+    catch { onFrameError(); }
+  }
+  function close() {
+    if (callback !== null) {
+      if (useVideoFrames) source.cancelVideoFrameCallback(callback);
+      else cancelAnimationFrame(callback);
+      callback = null;
+    }
+    track.stop();
+    canvas.width = canvas.height = 0;
+  }
+  try { draw(); schedule(); }
+  catch {
+    close();
+    throw new Error('Не удалось получить вертикальный кадр с камеры.');
+  }
+  return { track, close };
+}
+
 export function createCaptureSession({
   mediaDevices = globalThis.navigator?.mediaDevices,
   Recorder = globalThis.MediaRecorder,
   Stream = globalThis.MediaStream,
+  previewElement,
+  makeCanvas = () => document.createElement('canvas'),
   mobilePortrait = () => globalThis.matchMedia?.('(orientation: portrait) and (pointer: coarse)').matches === true,
   now = () => performance.now(),
   onChange = () => {}, onError = () => {}, onResult = () => {},
@@ -167,14 +217,20 @@ export function createCaptureSession({
     if (!getState().camera) throw new Error('Сначала включите камеру и разрешите микрофон.');
     if (mic.muted) throw new Error('Микрофон пока не передаёт звук. Проверьте его и повторите старт.');
     if (!Recorder) throw new Error('В этом браузере запись видео недоступна.');
+    const portrait = portraitTrack(previewElement, makeCanvas, () => {
+      onError('Не удалось получить следующий кадр. Завершаем дубль.');
+      void stopRecording();
+    });
     let recorder;
     try {
       const mimeType = formats.find(type => Recorder.isTypeSupported?.(type));
-      recorder = mimeType ? new Recorder(preview, { mimeType }) : new Recorder(preview);
+      const output = new Stream([mic, portrait.track]);
+      recorder = mimeType ? new Recorder(output, { mimeType }) : new Recorder(output);
     } catch {
+      portrait.close();
       throw new Error('Браузеру не удалось настроить запись видео со звуком.');
     }
-    const entry = { recorder, chunks: [], phase: 'starting', startedAt: null, stoppedAt: null, timeout: null };
+    const entry = { recorder, portrait, chunks: [], phase: 'starting', startedAt: null, stoppedAt: null, timeout: null };
     entry.done = new Promise(resolve => { entry.resolve = resolve; });
     take = entry;
     recorder.onstart = () => {
@@ -207,9 +263,10 @@ export function createCaptureSession({
     changed();
   }
 
-  function detach({ recorder, timeout }) {
+  function detach({ recorder, portrait, timeout }) {
     clearTimeout(timeout);
     recorder.onstart = recorder.onstop = recorder.onerror = recorder.ondataavailable = null;
+    portrait.close();
   }
 
   function finish(entry) {
@@ -257,6 +314,7 @@ export function createCaptureSession({
         ++voiceVersion;
         drop(video);
         drop(mic);
+        entry.portrait.close();
         video = mic = preview = null;
       }
     }

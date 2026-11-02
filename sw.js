@@ -1,11 +1,18 @@
 const CACHE_PREFIX = 'teleprompter-shell-';
-const CACHE_NAME = `${CACHE_PREFIX}v3`;
+const CACHE_NAME = `${CACHE_PREFIX}v4`;
 const APP_SHELL = [
   './',
   './index.html',
   './styles.css',
   './manifest.webmanifest',
   './js/app.js',
+  './js/studio.js',
+  './js/take-library.js',
+  './js/capture-session.js',
+  './js/speech-input.js',
+  './js/speech-processor.js',
+  './js/voice-match.js',
+  './js/voice-scroll.js',
   './js/platform-controls.js',
   './js/reader-controller.js',
   './js/scroll-engine.js',

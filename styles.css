@@ -1030,3 +1030,66 @@ input[type="range"] {
     animation-iteration-count: 1 !important;
   }
 }
+
+.camera-preview {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #13161c;
+}
+.camera-preview.selfie { transform: scaleX(-1); }
+.reader-view.has-camera {
+  --reader-pad-before: max(calc(var(--safe-top) + 54px), 22dvh);
+  --focus-position: var(--reader-pad-before);
+  --reader-pad-after: calc(100dvh - var(--reader-pad-before));
+}
+.has-camera .reader-scroll { background: linear-gradient(to bottom, #07090c55, #07090c77 60%, #07090c33); }
+.has-camera .reader-text {
+  color: #fff;
+  text-shadow: 0 1px 3px #000, 0 2px 7px #000, 1px 0 2px #000;
+  transform: none !important;
+}
+.has-camera .fade { opacity: .3; }
+.studio-dock {
+  position: absolute;
+  z-index: 7;
+  inset: auto var(--safe-right) var(--safe-bottom) var(--safe-left);
+  max-width: 760px;
+  margin: auto;
+  padding: 5px 8px;
+  background: var(--deck);
+  color: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.studio-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.studio-actions .mode-button { padding: 0 9px; min-height: 44px; font-size: .78rem; }
+.studio-actions .mode-button:disabled { opacity: .6; cursor: default; }
+.studio-dock[inert] { visibility: hidden; }
+#track-warning:not(:empty) { display: block; color: var(--danger); font-size: .8rem; }
+#voice-toggle[aria-checked="true"] { color: var(--tally); border-color: currentColor; }
+.record-button, #record-indicator { color: #ed534b; }
+#record-indicator { font: bold .82rem ui-monospace, monospace; }
+#studio-message, #take-message { margin: 4px 0; font-size: .8rem; }
+#studio-message:empty, #take-message:empty { display: none; }
+.reader-bottom { bottom: calc(var(--safe-bottom) + var(--dock-height, 60px) + 5px); }
+.take-dialog {
+  max-width: min(94vw, 560px);
+  max-height: 90dvh;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--deck);
+  color: var(--paper);
+  overflow: auto;
+}
+.take-dialog::backdrop { background: #080a0dd9; }
+.take-dialog video { width: 100%; max-height: 45dvh; background: #111; display: block; margin: 10px 0; }
+.take-dialog select { max-width: 100%; }
+.take-dialog h2 { margin: 4px 0 10px; }
+.take-dialog a { display: inline-flex; align-items: center; text-decoration: none; }
+@media (orientation: landscape) and (max-height: 560px) {
+  .studio-dock { margin-left: 0; width: calc(42vw - var(--safe-left)); }
+  .reader-bottom { bottom: var(--safe-bottom); }
+}

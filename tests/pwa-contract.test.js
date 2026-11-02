@@ -42,6 +42,13 @@ test('every runtime shell asset is served successfully', async () => {
     './manifest.webmanifest',
     './sw.js',
     './js/app.js',
+    './js/studio.js',
+    './js/take-library.js',
+    './js/capture-session.js',
+    './js/speech-input.js',
+    './js/speech-processor.js',
+    './js/voice-match.js',
+    './js/voice-scroll.js',
     './js/platform-controls.js',
     './js/reader-controller.js',
     './js/scroll-engine.js',
@@ -96,6 +103,19 @@ test('service worker install precaches the complete runtime shell', async () => 
   assert.ok(cachedAssets.includes('./index.html'));
   assert.ok(cachedAssets.includes('./js/app.js'));
   assert.ok(cachedAssets.includes('./icons/icon-512.png'));
+  const checked = new Set();
+  async function checkImports(asset) {
+    if (checked.has(asset)) return;
+    checked.add(asset);
+    assert.ok(cachedAssets.includes(asset), 'Missing offline module ' + asset);
+    const module = await readFile(path.join(projectRoot, asset), 'utf8');
+    for (const [, relative] of module.matchAll(/from\s+['"](\.\/[^'"]+\.js)['"]/g)) {
+      await checkImports('./' + path.posix.join(path.posix.dirname(asset), relative));
+    }
+  }
+  await checkImports('./js/app.js');
+  assert.ok(cachedAssets.includes('./js/speech-processor.js'));
+  assert.ok(!cachedAssets.some(asset => asset.includes('vendor/')), 'the optional model must not delay installation');
 });
 
 test('service worker activation deletes only older teleprompter caches', async () => {
@@ -118,6 +138,7 @@ test('service worker activation deletes only older teleprompter caches', async (
         'teleprompter-shell-v1',
         'teleprompter-shell-v2',
         'teleprompter-shell-v3',
+        'teleprompter-shell-v4',
         'another-app-cache',
       ],
       delete: async (name) => { deleted.push(name); return true; },
@@ -135,6 +156,7 @@ test('service worker activation deletes only older teleprompter caches', async (
     'teleprompter-shell-v0',
     'teleprompter-shell-v1',
     'teleprompter-shell-v2',
+    'teleprompter-shell-v3',
   ]);
 });
 

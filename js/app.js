@@ -16,6 +16,7 @@ import {
   saveAppState,
 } from './settings-store.js';
 import { createScrollEngine } from './scroll-engine.js';
+import { createStudio } from './studio.js';
 import { createReaderController, readerPrimaryAction } from './reader-controller.js';
 import {
   chooseServiceWorkerUpdateAction,
@@ -111,6 +112,7 @@ const wakeLock = createWakeLockController({
 });
 
 let readerController;
+let studio;
 
 const scrollEngine = createScrollEngine({
   requestFrame: window.requestAnimationFrame.bind(window),
@@ -124,6 +126,17 @@ readerController = createReaderController({
   schedule: window.setTimeout.bind(window),
   cancelSchedule: window.clearTimeout.bind(window),
   onState: renderReaderState,
+});
+
+function updateWake() {
+  const phase = readerController.getState().phase;
+  void wakeLock.setReadingActive(Boolean(studio?.busy() || studio?.following() || ['playing', 'countdown'].includes(phase)));
+}
+studio = createStudio({
+  view: elements.readerView, viewport: elements.readerScroll, article: elements.readerText,
+  pauseReading: () => readerController.pause(),
+  seek: progress => scrollEngine.seek(progress),
+  finishReading: () => readerController.finish(), updateWake, notify: showToast, reveal: () => showControls(),
 });
 
 function showToast(message, { error = false, timeout = 3_200 } = {}) {
@@ -157,6 +170,7 @@ function applyReaderAppearance() {
   elements.readerView.classList.toggle('focus-off', !focusMode);
   elements.readerMirrorButton.setAttribute('aria-pressed', String(mirror));
   elements.readerFocusButton.setAttribute('aria-pressed', String(focusMode));
+  studio.render();
 }
 
 function syncControlsFromState() {
@@ -258,19 +272,25 @@ function renderProgress(progress) {
 function showControls({ autoHide = true } = {}) {
   window.clearTimeout(controlsTimer);
   elements.readerView.classList.remove('controls-hidden');
+  studio?.setControlsHidden(false);
   readerControlPanels.forEach((panel) => {
     panel.inert = false;
     panel.removeAttribute('aria-hidden');
   });
-  if (autoHide && readerController.getState().phase === 'playing') {
+  if (autoHide && presenting()) {
     controlsTimer = window.setTimeout(hideControls, 2_800);
   }
 }
 
+function presenting() {
+  return readerController.getState().phase === 'playing' || studio?.following() || studio?.busy();
+}
+
 function hideControls() {
   window.clearTimeout(controlsTimer);
-  if (readerController.getState().phase !== 'playing') return;
+  if (!presenting()) return;
   elements.readerView.classList.add('controls-hidden');
+  studio?.setControlsHidden(true);
   readerControlPanels.forEach((panel) => {
     panel.inert = true;
     panel.setAttribute('aria-hidden', 'true');
@@ -294,20 +314,19 @@ function renderReaderState(state) {
 
   if (moving) {
     scrollEngine.play(durationMs);
-    void wakeLock.setReadingActive(true);
     showControls();
   } else {
     scrollEngine.pause();
-    void wakeLock.setReadingActive(state.phase === 'countdown');
     showControls({ autoHide: false });
   }
+  updateWake();
 
   if (state.phase === 'finished') {
     showToast('Сценарий прочитан. Можно начать сначала.');
   }
 }
 
-function enterReader() {
+function enterReader(withCamera = false) {
   const script = elements.scriptInput.value;
   if (!script.trim()) {
     showToast('Сначала вставьте текст сценария.', { error: true });
@@ -325,16 +344,20 @@ function enterReader() {
   readerController.reset();
   renderProgress(0);
 
-  const fullscreenRequest = requestElementFullscreen(document.documentElement);
-  fullscreenRequest.then((result) => {
-    elements.installHint.hidden = !shouldShowInstallHint(result, isStandalone());
-  });
-
-  readerController.start(appState.settings.countdown);
+  if (withCamera) {
+    // Let the reader frame the shot before starting either recording or text.
+    void studio.toggleCamera();
+  } else {
+    requestElementFullscreen(document.documentElement).then(result => {
+      elements.installHint.hidden = !shouldShowInstallHint(result, isStandalone());
+    });
+    readerController.start(appState.settings.countdown);
+  }
   elements.readerScroll.focus({ preventScroll: true });
 }
 
-function leaveReader() {
+async function leaveReader() {
+  if (!await studio.leave()) return;
   readerController.pause();
   void wakeLock.setReadingActive(false);
   elements.readerView.hidden = true;
@@ -346,6 +369,7 @@ function leaveReader() {
 }
 
 function togglePlayback() {
+  if (studio.following()) studio.stopVoice();
   const phase = readerController.getState().phase;
   if (phase === 'finished') {
     scrollEngine.restart();
@@ -358,6 +382,7 @@ function togglePlayback() {
 }
 
 function restartReading() {
+  if (studio.following()) studio.stopVoice();
   scrollEngine.restart();
   readerController.reset();
   readerController.start(0);
@@ -372,6 +397,7 @@ function seekBy(milliseconds) {
   if (durationMs <= 0) return;
   const next = scrollEngine.seek(currentProgress + (milliseconds / durationMs));
   reconcileSeekState(next);
+  studio.userMoved();
   showControls();
 }
 
@@ -401,7 +427,7 @@ async function toggleFullscreen() {
 }
 
 function handleKeyboard(event) {
-  if (elements.readerView.hidden) return;
+  if (elements.readerView.hidden || studio.library.isOpen()) return;
   if (shouldIgnoreReaderShortcut(document.activeElement, event.code)) return;
   if (shouldIgnoreShortcutRepeat(event.code, event.repeat)) {
     event.preventDefault();
@@ -416,7 +442,7 @@ function handleKeyboard(event) {
     ArrowRight: () => seekBy(5_000),
     KeyR: restartReading,
     KeyF: () => { void toggleFullscreen(); },
-    KeyM: () => setSetting('mirror', !appState.settings.mirror),
+    KeyM: toggleMirror,
   };
 
   const action = actions[event.code];
@@ -427,18 +453,22 @@ function handleKeyboard(event) {
 }
 
 function handleManualScroll() {
-  if (applyingScroll || scrollEngine.getSnapshot().isPlaying) return;
+  if (scrollEngine.getSnapshot().isPlaying) return;
   const distance = Math.max(0, elements.readerScroll.scrollHeight - elements.readerScroll.clientHeight);
   if (distance === 0) return;
+  // Scroll events from programmatic writes can arrive after the next frame.
+  if (Math.abs(currentProgress * distance - elements.readerScroll.scrollTop) < 1) return;
+  if (applyingScroll && !studio.following()) return;
   const next = scrollEngine.seek(elements.readerScroll.scrollTop / distance);
   reconcileSeekState(next);
+  studio.userMoved();
 }
 
 function handleReaderTap(event) {
   if (event.target.closest('button, input, label, a')) return;
   if (elements.readerView.classList.contains('controls-hidden')) {
     showControls();
-  } else if (readerController.getState().phase === 'playing') {
+  } else if (presenting()) {
     hideControls();
   }
 }
@@ -472,14 +502,18 @@ document.querySelectorAll('input[name="theme"]').forEach((input) => {
 
 elements.mirrorInput.addEventListener('change', () => setSetting('mirror', elements.mirrorInput.checked));
 elements.focusInput.addEventListener('change', () => setSetting('focusMode', elements.focusInput.checked));
-elements.startButton.addEventListener('click', enterReader);
+elements.startButton.addEventListener('click', () => enterReader());
+byId('shoot-button').addEventListener('click', () => enterReader(true));
 elements.backButton.addEventListener('click', leaveReader);
 elements.playButton.addEventListener('click', togglePlayback);
 elements.restartButton.addEventListener('click', restartReading);
 elements.seekBackButton.addEventListener('click', () => seekBy(-5_000));
 elements.seekForwardButton.addEventListener('click', () => seekBy(5_000));
 elements.fullscreenButton.addEventListener('click', () => { void toggleFullscreen(); });
-elements.readerMirrorButton.addEventListener('click', () => setSetting('mirror', !appState.settings.mirror));
+function toggleMirror() {
+  if (!studio.mirrorPreview()) setSetting('mirror', !appState.settings.mirror);
+}
+elements.readerMirrorButton.addEventListener('click', toggleMirror);
 elements.readerFocusButton.addEventListener('click', () => setSetting('focusMode', !appState.settings.focusMode));
 elements.readerStage.addEventListener('click', handleReaderTap);
 elements.readerStage.addEventListener('pointermove', () => showControls());
@@ -488,6 +522,7 @@ elements.readerScroll.addEventListener('scroll', handleManualScroll, { passive: 
 elements.progressInput.addEventListener('input', () => {
   const next = scrollEngine.seek(Number(elements.progressInput.value) / 1_000);
   reconcileSeekState(next);
+  studio.userMoved();
   showControls();
 });
 
@@ -520,7 +555,10 @@ document.addEventListener('visibilitychange', () => {
 let resizeFrame = null;
 function handleViewportChange() {
   window.cancelAnimationFrame(resizeFrame);
-  resizeFrame = window.requestAnimationFrame(() => renderProgress(currentProgress));
+  resizeFrame = window.requestAnimationFrame(() => {
+    renderProgress(currentProgress);
+    studio.refresh();
+  });
 }
 
 window.addEventListener('resize', handleViewportChange);
@@ -535,6 +573,10 @@ document.addEventListener('fullscreenchange', handleFullscreenChange);
 document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
 
 elements.updateButton.addEventListener('click', () => {
+  if (studio.busy() || studio.library.hasUnsaved()) {
+    showToast('Завершите запись и сохраните дубль перед обновлением.');
+    return;
+  }
   const action = chooseServiceWorkerUpdateAction({
     activatedElsewhere: updateActivatedElsewhere,
     waiting: pendingRegistration?.waiting,

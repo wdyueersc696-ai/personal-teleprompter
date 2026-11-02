@@ -155,7 +155,9 @@
               <span>Запустить суфлёр</span>
               <span aria-hidden="true">↗</span>
             </button>
-            <p>Экран займёт суфлёр. Для съёмки используйте вторую камеру, другое устройство или физическое стекло.</p>
+            <button id="shoot-button" type="button" class="transport-button">Открыть камеру</button>
+            <p>Камере и микрофону нужен доступ. Голосовая прокрутка работает на устройстве и при первом включении загружает русскую модель с движком (около 52 МБ).</p>
+            <button id="setup-takes" type="button" class="mode-button" hidden>Посмотреть дубли</button>
           </div>
 
           <aside id="install-hint" class="install-hint" hidden>
@@ -167,6 +169,7 @@
 
       <section id="reader-view" class="reader-view" data-phase="idle" aria-label="Режим чтения" hidden>
         <div id="reader-stage" class="reader-stage">
+          <video id="camera-preview" class="camera-preview" muted autoplay playsinline hidden aria-label="Превью фронтальной камеры"></video>
           <div id="reader-scroll" class="reader-scroll" tabindex="-1">
             <article id="reader-text" class="reader-text" aria-live="off"></article>
           </div>
@@ -192,6 +195,17 @@
               <button id="fullscreen-button" type="button" class="icon-button" aria-label="Полный экран" title="Полный экран (F)">⛶</button>
             </div>
           </header>
+          <section class="studio-dock" aria-label="Съёмка и голос">
+            <div class="studio-actions">
+              <button type="button" class="mode-button" id="camera-toggle" aria-pressed="false">Камера</button>
+              <button type="button" class="mode-button record-button" id="record-button" hidden>Начать запись</button>
+              <button type="button" class="mode-button" id="voice-toggle" role="switch" aria-checked="false">Следовать за голосом</button>
+              <button type="button" class="mode-button" id="reader-takes" hidden>Дубли</button>
+            </div>
+            <p id="studio-message" role="status"></p>
+            <span id="record-indicator" hidden>● Запись <time id="record-clock">00:00</time></span>
+            <span id="track-warning" role="status"></span>
+          </section>
 
           <div class="reader-bottom reader-controls" data-reader-controls>
             <label class="timeline-label" for="progress-input">Позиция</label>
@@ -227,6 +241,20 @@
         </div>
       </section>
     </main>
+
+    <dialog id="take-dialog" class="take-dialog" aria-labelledby="take-title">
+      <h2 id="take-title">Записанные дубли</h2>
+      <label>Выберите дубль <select id="take-list"></select></label>
+      <video id="take-player" controls playsinline preload="metadata"></video>
+      <p>Дубли хранятся в этом браузере. Скачайте файл или отправьте его в «Файлы» для постоянного хранения.</p>
+      <div class="studio-actions">
+        <a class="mode-button" id="take-download" download>Скачать файл</a>
+        <button class="mode-button" id="take-share" type="button" hidden>Поделиться</button>
+        <button class="mode-button" id="take-delete" type="button">Удалить дубль</button>
+        <button class="mode-button" id="take-close" type="button">Закрыть</button>
+      </div>
+      <p id="take-message" role="status"></p>
+    </dialog>
 
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
     <div id="update-notice" class="update-notice" role="status" hidden>

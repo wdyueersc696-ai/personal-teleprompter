@@ -1041,6 +1041,7 @@ input[type="range"] {
   stroke-linejoin: round;
 }
 .camera-only { display: none; }
+.reading-modes { display: contents; }
 .prompt-window { display: contents; }
 .launch-block { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; }
 .launch-block p { grid-column: 1 / -1; }
@@ -1089,7 +1090,7 @@ input[type="range"] {
   .reader-bottom { bottom: var(--safe-bottom); }
 }
 
-/* The monitor and the recorder share a centered 9:16 crop of the source. */
+/* The frame clips the preview to the same 9:16 composition used by the recorder. */
 .reader-view.has-camera {
   --deck: #17191b;
   --paper: #f8faf9;
@@ -1101,25 +1102,32 @@ input[type="range"] {
   --camera-width: min(100%, 56.25dvh);
   --hud-width: min(100%, max(300px, 56.25dvh));
   --frame-margin: max(0px, calc((100dvh - 177.77778vw) / 2));
-  --prompt-size: clamp(19px, calc(var(--reader-font-size) * .47), 36px);
-  --prompt-lines: 3;
-  --prompt-line-height: calc(var(--prompt-size) * 1.25);
+  --prompt-line-height: calc(var(--reader-font-size) * var(--reader-line-height));
   background: #0b0c0d;
   color: var(--paper);
   color-scheme: dark;
 }
-.camera-preview {
+.camera-frame { display: none; }
+.has-camera .camera-frame {
   position: absolute;
+  display: block;
   inset: 0;
   width: var(--camera-width);
   height: auto;
   aspect-ratio: 9 / 16;
   margin: auto;
-  object-fit: cover;
-  object-position: center;
-  background: #111213;
+  overflow: hidden;
+  background: #101114;
 }
-.camera-preview.selfie { transform: scaleX(-1); }
+.camera-preview {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: var(--camera-fit, cover);
+  object-position: center;
+  transform: scale(var(--camera-scale, 1));
+}
+.camera-preview.selfie { transform: scale(var(--camera-scale, 1)) scaleX(-1); }
 .has-camera .camera-only { display: inline-flex; }
 .has-camera .reader-only,
 .has-camera .reader-status,
@@ -1190,22 +1198,25 @@ input[type="range"] {
 .has-camera .prompt-window {
   position: absolute;
   z-index: 1;
-  inset: max(calc(var(--safe-top) + 54px), calc(var(--frame-margin) + 8px)) 0 auto;
+  inset: max(calc(var(--safe-top) + 52px), calc(var(--frame-margin) + 6px)) 0
+    max(calc(var(--safe-bottom) + var(--dock-height, 119px) + 9px), calc(var(--frame-margin) + 6px));
   display: flex;
-  width: min(calc(var(--camera-width) - 24px), 400px);
+  width: calc(var(--camera-width) - 16px);
   flex-flow: column;
   margin: auto;
-  border: 1px solid #ffffff26;
-  border-radius: 15px;
-  padding: 10px 13px 8px;
-  background: #101514c9;
+  border: 1px solid #ffffff36;
+  border-radius: 20px;
+  padding: 12px 7px 10px;
+  background: linear-gradient(135deg, #0a101363, #080c0e38);
   color: #fff;
 }
 .has-camera .prompt-caption {
   align-items: center;
   gap: 6px;
-  margin-bottom: 4px;
-  color: #d5e4e0;
+  width: var(--reader-width);
+  margin: 0 auto 8px;
+  color: #eef9f6;
+  text-shadow: 0 1px 4px #000;
   font-size: 10px;
   font-weight: 650;
   letter-spacing: .08em;
@@ -1216,17 +1227,24 @@ input[type="range"] {
 .has-camera .reader-scroll {
   position: relative;
   inset: auto;
-  height: calc(var(--prompt-line-height) * var(--prompt-lines));
-  mask-image: linear-gradient(to bottom, #000 72%, #000b);
-  -webkit-mask-image: linear-gradient(to bottom, #000 72%, #000b);
+  flex: 1;
+  min-height: 0;
+  -webkit-mask-image: linear-gradient(to bottom, #000 24%, #000e 71%, #0008);
+  mask-image: linear-gradient(to bottom, #000 24%, #000e 71%, #0008);
+}
+.has-camera .reader-scroll::after {
+  display: block;
+  height: max(0px, calc(100% - var(--prompt-line-height)));
+  content: "";
 }
 .reader-view.has-camera .reader-text {
-  width: 100%;
-  padding: 0 0 calc(var(--prompt-line-height) * (var(--prompt-lines) - 1));
+  width: var(--reader-width);
+  padding: 0;
   color: #fff;
-  font-size: var(--prompt-size);
+  font-size: var(--reader-font-size);
   font-weight: 650;
-  line-height: var(--prompt-line-height);
+  line-height: var(--reader-line-height);
+  text-shadow: 0 1px 3px #000d, 0 2px 9px #0009;
   text-wrap: wrap;
   transform: none;
 }
@@ -1238,10 +1256,10 @@ input[type="range"] {
 .has-camera .studio-dock {
   inset: auto 0 var(--safe-bottom);
   display: flex;
-  width: min(var(--hud-width), 340px);
+  width: min(var(--hud-width), 384px);
   flex-direction: column;
   align-items: center;
-  gap: 5px;
+  gap: 7px;
   margin: 0 auto;
   border: 0;
   padding: 0 12px;
@@ -1250,12 +1268,48 @@ input[type="range"] {
 }
 .has-camera .studio-dock .studio-actions {
   display: grid;
-  width: min(100%, 270px);
-  grid-template-columns: 1fr 70px 1fr;
+  width: 100%;
+  grid-template-columns: minmax(0, 1fr) 64px minmax(0, 1fr);
   align-items: center;
   justify-items: center;
   order: 2;
   pointer-events: auto;
+}
+.has-camera .zoom-presets {
+  order: 1;
+  align-items: center;
+  gap: 0;
+  border: 1px solid #ffffff30;
+  border-radius: 24px;
+  padding-inline: 4px;
+  background: #151819b8;
+  pointer-events: auto;
+}
+.zoom-presets button {
+  min-width: 44px;
+  min-height: 44px;
+  border: 0;
+  border-radius: 50%;
+  padding: 0 7px;
+  background: transparent;
+  color: #fcfffe;
+  font: 650 13px/1 system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.zoom-presets button[aria-pressed="true"] {
+  color: #a1f3e9;
+  background: #e0ffff1f;
+}
+.has-camera .reading-modes {
+  grid-area: 1 / 1;
+  display: flex;
+  justify-self: end;
+  align-items: center;
+  margin-right: 5px;
+  border: 1px solid #ffffff30;
+  border-radius: 25px;
+  background: #151819d9;
 }
 .has-camera .studio-actions .mode-button { padding: 0; }
 .has-camera #record-button {
@@ -1281,6 +1335,7 @@ input[type="range"] {
   height: 28px;
   border-radius: 6px;
 }
+.has-camera #camera-auto-toggle,
 .has-camera #voice-toggle,
 .has-camera #reader-takes,
 .has-camera .empty-takes {
@@ -1291,12 +1346,21 @@ input[type="range"] {
   gap: 2px;
   font: 600 10px/12px system-ui, sans-serif;
 }
-.has-camera #voice-toggle { grid-area: 1 / 1; }
+.has-camera .reading-modes :is(#camera-auto-toggle, #voice-toggle) {
+  width: 48px;
+  height: 48px;
+  border: 1px solid transparent;
+  background: none;
+}
+.tempo-pause,
+#camera-auto-toggle[aria-pressed="true"] .tempo-play { display: none; }
+#camera-auto-toggle[aria-pressed="true"] .tempo-pause { display: inline; }
 .has-camera #reader-takes,
 .has-camera .empty-takes { grid-area: 1 / 3; }
 .has-camera #reader-takes:not([hidden]) + .empty-takes { display: none; }
 .has-camera .studio-actions button:disabled { opacity: .6; cursor: default; }
-.has-camera #voice-toggle[aria-checked="true"] {
+.has-camera #voice-toggle[aria-checked="true"],
+.has-camera #camera-auto-toggle[aria-pressed="true"] {
   border-color: #8ff1e7;
   background: #83e0d8;
   color: #0d2725;
@@ -1324,6 +1388,7 @@ input[type="range"] {
   background: #171a1bf5;
 }
 .has-camera .camera-options-heading { padding: 2px 3px; font-size: .84rem; font-weight: 700; }
+.has-camera .capture-info { display: block; margin: 0 3px 8px; color: var(--quiet); font-size: .75rem; }
 .has-camera .quick-settings { flex-wrap: wrap; }
 .has-camera #reader-focus-button { display: none; }
 .has-camera #camera-off { align-items: center; }
@@ -1338,10 +1403,16 @@ input[type="range"] {
   font-size: clamp(4rem, 13vw, 8rem);
   text-shadow: 0 2px 9px #000;
 }
-@media (max-height: 670px) {
-  .reader-view.has-camera { --prompt-lines: 2; }
-}
 @media (orientation: landscape) and (max-height: 560px) {
-  .reader-view.has-camera { --prompt-size: 18px; }
-  .has-camera .studio-dock { bottom: max(6px, env(safe-area-inset-bottom)); }
+  .has-camera .reader-topbar { width: 100%; }
+  .has-camera .prompt-window {
+    inset: calc(var(--safe-top) + 48px) auto 10px max(var(--safe-left), calc(50% - 295px));
+    width: min(49vw, 430px);
+  }
+  .has-camera .studio-dock {
+    inset: auto max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) auto;
+    width: min(47%, 295px);
+    padding: 0 4px;
+  }
+  .has-camera .camera-meter { left: 58%; }
 }

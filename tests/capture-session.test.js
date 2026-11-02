@@ -19,15 +19,16 @@ function harness(options = {}) {
   const canvases = [];
   const frames = new Map();
   let nextFrame = 0;
-  const previewElement = {
+  const previewElement = Object.assign(new EventTarget(), {
     videoWidth: 1280, videoHeight: 720, readyState: 4,
+    style: { setProperty(name, value) { this[name] = value; } },
     requestVideoFrameCallback(fn) { frames.set(++nextFrame, fn); return nextFrame; },
     cancelVideoFrameCallback(id) { frames.delete(id); },
-  };
+  });
   function makeCanvas() {
     const canvas = {
-      track: new Track('video'), draws: [],
-      getContext() { return { drawImage: (...args) => this.draws.push(args) }; },
+      track: new Track('video'), draws: [], fills: [],
+      getContext() { return { drawImage: (...args) => this.draws.push(args), fillRect: (...args) => this.fills.push(args) }; },
       captureStream() { return new Stream([this.track]); },
     };
     canvases.push(canvas);
@@ -192,7 +193,7 @@ test('empty recorder output produces an error rather than an invalid download', 
 test('mobile portrait requests upright framing without mandatory size or orientation', async () => {
   const { calls, session } = harness({ mobilePortrait: () => true });
   await session.enableCamera();
-  assert.deepEqual(calls[0].video, { facingMode: { ideal: 'user' }, width: { ideal: 720 }, height: { ideal: 1280 } });
+  assert.deepEqual(calls[0].video, { facingMode: { ideal: 'user' }, width: { ideal: 720 }, height: { ideal: 1280 }, resizeMode: { ideal: 'none' } });
   await session.close();
 });
 
@@ -229,6 +230,112 @@ test('recording waits for a decoded frame and never silently falls back to a lan
   assert.equal(canvases.length, 0);
   assert.equal(recorders.length, 0);
   assert.equal(session.getState().camera, true);
+  await session.close();
+});
+
+test('wide reveals the original field and subsequent zooms change the same live recording and preview', async () => {
+  const { session, previewElement, calls, recorders, canvases, frames } = harness();
+  await session.enableCamera();
+  await session.setZoom('wide');
+  session.startRecording();
+  const [canvas] = canvases;
+  assert.equal(session.getState().zoomMode, 'fit');
+  assert.equal(previewElement.style['--camera-fit'], 'contain');
+  assert.deepEqual(canvas.fills[0], [0, 0, 720, 1280]);
+  assert.deepEqual(canvas.draws[0], [previewElement, 0, 437.5, 720, 405]);
+  await session.setZoom('2');
+  const [id, paint] = frames.entries().next().value;
+  frames.delete(id);
+  paint();
+  assert.equal(session.getState().zoomMode, 'digital');
+  assert.equal(previewElement.style['--camera-scale'], '2');
+  assert.equal(previewElement.style['--camera-fit'], 'cover');
+  assert.deepEqual(canvas.draws[1], [previewElement, 538.75, 180, 202.5, 360, 0, 0, 720, 1280]);
+  assert.equal(recorders.length, 1);
+  assert.equal(calls.length, 1);
+  const stopping = session.close();
+  recorders[0].deliver();
+  await stopping;
+});
+
+test('late video metadata enables fit and an uncropped 9:16 camera cannot falsely zoom out', async () => {
+  const { session, previewElement } = harness();
+  previewElement.videoWidth = 0;
+  await session.enableCamera();
+  assert.equal(session.getState().canWiden, false);
+  previewElement.videoWidth = 960;
+  previewElement.videoHeight = 1280;
+  previewElement.dispatchEvent(new Event('loadedmetadata'));
+  assert.equal(session.getState().canWiden, true);
+  await session.setZoom('wide');
+  previewElement.videoWidth = 720;
+  previewElement.dispatchEvent(new Event('resize'));
+  assert.equal(session.getState().zoom, 1);
+  assert.equal(session.getState().canWiden, false);
+  await assert.rejects(session.setZoom('wide'), /весь доступный кадр/);
+  await session.close();
+});
+
+test('device zoom is relative to its actual starting setting and rapid taps restore it', async () => {
+  let actual = 2;
+  const requested = [];
+  const video = Object.assign(new Track('video'), {
+    getCapabilities: () => ({ zoom: { min: 1, max: 3, step: 0.5 } }),
+    getSettings: () => ({ zoom: actual }),
+    async applyConstraints(c) {
+      const zoom = c.advanced[0].zoom;
+      requested.push(zoom);
+      await Promise.resolve();
+      actual = zoom;
+    },
+  });
+  const { session, previewElement } = harness({ mediaDevices: { getUserMedia: async () => new Stream([new Track('audio'), video]) } });
+  await session.enableCamera();
+  previewElement.videoWidth = 720;
+  previewElement.videoHeight = 1280;
+  assert.equal(session.getState().canWiden, true);
+  await session.setZoom('wide');
+  assert.equal(actual, 1);
+  assert.equal(session.getState().zoomMode, 'device');
+  assert.equal(previewElement.style['--camera-fit'], 'cover');
+  await session.setZoom(2);
+  assert.equal(actual, 3);
+  assert.equal(Number(previewElement.style['--camera-scale']), 4 / 3);
+  await Promise.all([session.setZoom('wide'), session.setZoom(1)]);
+  assert.equal(session.getState().zoom, 1);
+  assert.deepEqual(requested, [1, 3, 1, 2]);
+  assert.equal(actual, 2);
+  assert.equal(previewElement.style['--camera-scale'], '1');
+  await session.close();
+});
+
+test('ignored device constraints fall back to framing while rejected PTZ permission still opens the camera', async () => {
+  const calls = [];
+  const applied = [];
+  const video = Object.assign(new Track('video'), {
+    getCapabilities: () => ({ zoom: { min: 1, max: 3, step: 1 } }),
+    getSettings: () => ({ zoom: 2 }),
+    async applyConstraints(constraints) { applied.push(constraints); },
+  });
+  const { session, previewElement } = harness({ mediaDevices: {
+    getSupportedConstraints: () => ({ zoom: true }),
+    async getUserMedia(c) {
+      calls.push(c);
+      if (c.video.zoom) throw new DOMException('No PTZ', 'NotAllowedError');
+      return new Stream([new Track('audio'), video]);
+    },
+  } });
+  await session.enableCamera();
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].video.zoom, true);
+  assert.equal(calls[1].video.zoom, undefined);
+  await session.setZoom('wide');
+  assert.equal(applied.length, 2);
+  assert.equal(session.getState().zoomMode, 'fit');
+  assert.equal(previewElement.style['--camera-fit'], 'contain');
+  await session.setZoom(1.5);
+  assert.equal(session.getState().zoomMode, 'digital');
+  assert.equal(previewElement.style['--camera-scale'], '1.5');
   await session.close();
 });
 

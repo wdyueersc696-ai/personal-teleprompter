@@ -4,7 +4,8 @@ import { createVoiceScroll } from './voice-scroll.js';
 import { createTakeLibrary } from './take-library.js';
 import { formatClock } from './teleprompter-model.js';
 
-export function createStudio({ view, viewport, article, pauseReading, seek, finishReading, notify, updateWake, reveal }) {
+export function createStudio({ view, viewport, article, pauseReading, resumeTempo, onVoiceStart, onRecordingChange,
+  seek, finishReading, notify, updateWake, reveal }) {
   const id = name => document.getElementById(name);
   const camera = id('camera-toggle');
   const record = id('record-button');
@@ -15,6 +16,7 @@ export function createStudio({ view, viewport, article, pauseReading, seek, fini
   const dock = view.querySelector('.studio-dock');
   const promptToggle = id('prompt-toggle');
   const optionsToggle = id('camera-options-toggle');
+  const zoomControls = id('camera-zoom');
   let opening = false;
   let cameraEpoch = 0;
   let voiceEpoch = 0;
@@ -24,6 +26,8 @@ export function createStudio({ view, viewport, article, pauseReading, seek, fini
   let quietTimer = null;
   let heard = '';
   let wasPresenting = false;
+  let wasRecording = false;
+  let restoreTempo = false;
 
   const library = createTakeLibrary({ notify, onOpen: () => {
     pauseReading();
@@ -111,6 +115,10 @@ export function createStudio({ view, viewport, article, pauseReading, seek, fini
       });
     }
     preview.classList.toggle('selfie', mirroredPreview);
+    if (state.camera) {
+      const input = preview.videoWidth ? ' · Вход камеры ' + preview.videoWidth + '×' + preview.videoHeight : '';
+      id('capture-info').textContent = 'Файл 720×1280 · до 30 кадр/с' + input;
+    }
     mirror.textContent = state.camera ? 'Зеркало превью' : 'Зеркало';
     mirror.setAttribute('aria-pressed', String(state.camera ? mirroredPreview : view.classList.contains('is-mirrored')));
     camera.setAttribute('aria-pressed', String(state.camera));
@@ -131,6 +139,11 @@ export function createStudio({ view, viewport, article, pauseReading, seek, fini
     id('reader-takes').disabled = active;
     toggle.setAttribute('aria-checked', String(voiceOn));
     toggle.disabled = view.classList.contains('no-script');
+    for (const button of zoomControls.querySelectorAll('[data-zoom]')) {
+      const preset = button.dataset.zoom;
+      button.hidden = preset === 'wide' && !state.canWiden;
+      button.setAttribute('aria-pressed', String(preset === String(state.zoom)));
+    }
     if (running && timer === null) {
       updateClock();
       timer = setInterval(updateClock, 250);
@@ -147,6 +160,10 @@ export function createStudio({ view, viewport, article, pauseReading, seek, fini
       wasPresenting = voiceOn || active;
       reveal();
     }
+    if (running !== wasRecording) {
+      wasRecording = running;
+      onRecordingChange(running);
+    }
     updateWake();
   }
 
@@ -159,7 +176,10 @@ export function createStudio({ view, viewport, article, pauseReading, seek, fini
     }
     opening = true;
     render();
-    try { await capture.enableCamera(); }
+    try {
+      await capture.enableCamera();
+      return token === cameraEpoch && capture.getState().camera;
+    }
     catch (error) { if (token === cameraEpoch) notify(error.message); }
     finally { if (token === cameraEpoch) { opening = false; render(); } }
   }
@@ -180,9 +200,15 @@ export function createStudio({ view, viewport, article, pauseReading, seek, fini
     message.textContent = error.message + ' Нажмите кнопку голоса для повтора.';
   }
   async function toggleVoice() {
-    if (voiceOn) { stopVoice(true); return; }
+    if (voiceOn) {
+      stopVoice(true);
+      if (restoreTempo && capture.getState().camera) resumeTempo();
+      return;
+    }
     const token = ++voiceEpoch;
     voiceOn = true;
+    restoreTempo = capture.getState().camera && ['playing', 'countdown'].includes(view.dataset.phase);
+    onVoiceStart();
     pauseReading();
     try {
       follower.start();
@@ -209,6 +235,12 @@ export function createStudio({ view, viewport, article, pauseReading, seek, fini
     return true;
   }
   camera.addEventListener('click', toggleCamera);
+  zoomControls.addEventListener('click', async event => {
+    const button = event.target.closest('button[data-zoom]');
+    if (!button) return;
+    try { await capture.setZoom(button.dataset.zoom); }
+    catch (error) { notify(error.message); }
+  });
   id('camera-off').addEventListener('click', toggleCamera);
   preview.addEventListener('loadeddata', () => render());
   preview.addEventListener('playing', () => render());

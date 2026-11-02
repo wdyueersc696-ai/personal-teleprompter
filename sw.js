@@ -1,5 +1,5 @@
 const CACHE_PREFIX = 'teleprompter-shell-';
-const CACHE_NAME = `${CACHE_PREFIX}v5`;
+const CACHE_NAME = `${CACHE_PREFIX}v6`;
 const MODEL_PATH = './vendor/vosk-model-small-ru-0.22.tar.gz';
 const APP_SHELL = [
   './',
@@ -10,6 +10,7 @@ const APP_SHELL = [
   './js/studio.js',
   './js/take-library.js',
   './js/capture-session.js',
+  './js/camera-framing.js',
   './js/speech-input.js',
   './js/speech-model-cache.js',
   './js/speech-processor.js',
@@ -28,7 +29,7 @@ const APP_SHELL = [
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    // Bypass HTTP cache so a recently used v4 module cannot enter the v5 shell.
+    // Always install the new revision, even when the previous shell is in HTTP cache.
     caches.open(CACHE_NAME).then((cache) => cache.addAll(
       APP_SHELL.map(path => new Request(new URL(path, self.location.href), { cache: 'reload' })),
     )),
@@ -37,6 +38,15 @@ self.addEventListener('install', (event) => {
 
 async function activate() {
   const names = await caches.keys();
+  if (names.includes('teleprompter-shell-v5')) {
+    // The voice engine is unchanged in v6. Keep it usable offline after updating.
+    for (const asset of ['./vendor/vosk-0.0.8-mobile.js', './vendor/vosk-worker-0.0.8-mobile.js']) {
+      try {
+        const cached = await caches.match(asset, { cacheName: 'teleprompter-shell-v5', ignoreSearch: true });
+        if (cached) await (await caches.open(CACHE_NAME)).put(asset, cached);
+      } catch { /* Optional assets can be downloaded again online. */ }
+    }
+  }
   if (names.includes('teleprompter-shell-v4')) {
     // v4 stored this immutable archive alongside the shell. Reuse the first download.
     try {

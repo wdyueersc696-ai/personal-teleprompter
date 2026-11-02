@@ -83,6 +83,7 @@ export function createTakeLibrary({
   let url = null;
   let file = null;
   let selection = 0;
+  let newestUnopened = null;
   let listError = false;
 
   function showLaunchers() {
@@ -164,6 +165,7 @@ export function createTakeLibrary({
     };
     entries.set(id, meta);
     volatile.set(id, blob);
+    if (!dialog.open) newestUnopened = id;
     refreshList(id);
     const pending = store.write(meta, blob).then(() => {
       volatile.delete(id);
@@ -182,7 +184,8 @@ export function createTakeLibrary({
     if (dialog.open || onOpen?.() === false) return;
     if (dialog.showModal) dialog.showModal();
     else dialog.setAttribute('open', '');
-    refreshList();
+    refreshList(newestUnopened ?? list.value);
+    newestUnopened = null;
   }
   function close() {
     if (dialog.close) dialog.close();

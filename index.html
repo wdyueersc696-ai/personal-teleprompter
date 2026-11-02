@@ -169,7 +169,9 @@
 
       <section id="reader-view" class="reader-view" data-phase="idle" aria-label="Режим чтения" hidden>
         <div id="reader-stage" class="reader-stage">
-          <video id="camera-preview" class="camera-preview" muted autoplay playsinline hidden aria-label="Превью фронтальной камеры"></video>
+          <div class="camera-frame">
+            <video id="camera-preview" class="camera-preview" muted autoplay playsinline hidden aria-label="Превью фронтальной камеры"></video>
+          </div>
           <div class="prompt-window">
             <div class="prompt-caption camera-only" aria-hidden="true"><i></i>Сценарий</div>
             <div id="reader-scroll" class="reader-scroll" tabindex="-1">
@@ -212,13 +214,25 @@
             </div>
           </header>
           <section class="studio-dock" aria-label="Съёмка и голос">
+            <div id="camera-zoom" class="zoom-presets camera-only" role="group" aria-label="Масштаб кадра">
+              <button type="button" data-zoom="wide" aria-pressed="false" title="Показать более широкий кадр">Шире</button>
+              <button type="button" data-zoom="1" aria-pressed="true" title="Масштаб 1×">1×</button>
+              <button type="button" data-zoom="1.5" aria-pressed="false" title="Масштаб 1,5×">1,5×</button>
+              <button type="button" data-zoom="2" aria-pressed="false" title="Масштаб 2×">2×</button>
+            </div>
             <div class="studio-actions">
               <button type="button" class="mode-button" id="camera-toggle" aria-pressed="false">Камера</button>
               <button type="button" class="mode-button record-button" id="record-button" aria-pressed="false" title="Начать запись" hidden>Начать запись</button>
-              <button type="button" class="mode-button" id="voice-toggle" role="switch" aria-checked="false" aria-label="Следовать за голосом" title="Следовать за голосом">
-                <svg class="studio-icon camera-only" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10v4m4-8v12m5-16v20m5-16v12m4-8v4"/></svg>
-                <span class="reader-only">Следовать за голосом</span><span class="camera-only" aria-hidden="true">Голос</span>
-              </button>
+              <div class="reading-modes">
+                <button type="button" class="mode-button camera-only" id="camera-auto-toggle" aria-pressed="false" aria-label="Автопрокрутка по темпу" title="Автопрокрутка по темпу">
+                  <svg class="studio-icon" viewBox="0 0 24 24" aria-hidden="true"><path class="tempo-play" d="m8 5 11 7-11 7z"/><path class="tempo-pause" d="M8 5v14m8-14v14"/></svg>
+                  <span>Темп</span>
+                </button>
+                <button type="button" class="mode-button" id="voice-toggle" role="switch" aria-checked="false" aria-label="Следовать за голосом" title="Следовать за голосом">
+                  <svg class="studio-icon camera-only" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10v4m4-8v12m5-16v20m5-16v12m4-8v4"/></svg>
+                  <span class="reader-only">Следовать за голосом</span><span class="camera-only" aria-hidden="true">Голос</span>
+                </button>
+              </div>
               <button type="button" class="mode-button" id="reader-takes" title="Открыть дубли" hidden>
                 <svg class="studio-icon camera-only" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h12"/><rect x="3" y="7" width="18" height="14" rx="3"/><path d="m10 11 5 3-5 3z"/></svg>
                 <span>Дубли</span>
@@ -234,6 +248,7 @@
 
           <div id="camera-options" class="reader-bottom reader-controls" data-reader-controls>
             <div class="camera-options-heading camera-only">Параметры чтения</div>
+            <p id="capture-info" class="camera-only capture-info"></p>
             <label class="timeline-label" for="progress-input">Позиция</label>
             <input id="progress-input" class="timeline" type="range" min="0" max="1000" step="1" value="0">
 

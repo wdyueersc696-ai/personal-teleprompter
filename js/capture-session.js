@@ -1,9 +1,12 @@
+import { createCameraFraming } from './camera-framing.js';
+
 // The camera owns a pair of device tracks. Speech borrows the microphone;
 // releasing that lease must never stop or replace the recorder's audio track.
 function frontCamera(portrait) {
   return {
     facingMode: { ideal: 'user' },
     width: { ideal: portrait ? 720 : 1280 }, height: { ideal: portrait ? 1280 : 720 },
+    resizeMode: { ideal: 'none' },
   };
 }
 const formats = ['video/mp4;codecs=avc1.42E01E,mp4a.40.2', 'video/webm;codecs=vp8,opus', 'video/mp4', 'video/webm'];
@@ -21,14 +24,14 @@ function deviceError(error) {
 }
 
 // Draw only the decoded camera image. Its intrinsic dimensions already include
-// presentation rotation; the centered crop matches object-fit: cover in a 9:16 preview.
-function portraitTrack(source, makeCanvas, onFrameError) {
+// presentation rotation. The framing controller is shared with the live preview.
+function portraitTrack(source, framing, makeCanvas, onFrameError) {
   if (!source || source.readyState < 2 || !source.videoWidth || !source.videoHeight) {
     throw new Error('Дождитесь изображения с камеры и нажмите запись ещё раз.');
   }
   const canvas = makeCanvas();
-  canvas.width = 720;
-  canvas.height = 1280;
+  canvas.width = framing.width;
+  canvas.height = framing.height;
   const context = canvas.getContext('2d', { alpha: false });
   if (!context || !canvas.captureStream) throw new Error('Этот браузер не поддерживает вертикальную видеозапись.');
   const [track] = canvas.captureStream(30).getVideoTracks();
@@ -36,19 +39,11 @@ function portraitTrack(source, makeCanvas, onFrameError) {
   const useVideoFrames = typeof source.requestVideoFrameCallback === 'function';
   let callback = null;
 
-  function draw() {
-    const { videoWidth: width, videoHeight: height } = source;
-    if (source.readyState < 2 || !width || !height) return;
-    const scale = Math.max(canvas.width / width, canvas.height / height);
-    const cropWidth = canvas.width / scale, cropHeight = canvas.height / scale;
-    context.drawImage(source, (width - cropWidth) / 2, (height - cropHeight) / 2,
-      cropWidth, cropHeight, 0, 0, canvas.width, canvas.height);
-  }
   function schedule() {
     callback = useVideoFrames ? source.requestVideoFrameCallback(next) : requestAnimationFrame(next);
   }
   function next() {
-    try { draw(); schedule(); }
+    try { framing.draw(context); schedule(); }
     catch { onFrameError(); }
   }
   function close() {
@@ -60,7 +55,7 @@ function portraitTrack(source, makeCanvas, onFrameError) {
     track.stop();
     canvas.width = canvas.height = 0;
   }
-  try { draw(); schedule(); }
+  try { framing.draw(context); schedule(); }
   catch {
     close();
     throw new Error('Не удалось получить вертикальный кадр с камеры.');
@@ -88,9 +83,11 @@ export function createCaptureSession({
   let voiceVersion = 0;
   let queue = Promise.resolve();
   const endedHandlers = new Map();
+  const framing = createCameraFraming(previewElement, changed);
 
   function getState() {
     return {
+      ...framing.state(),
       camera: cameraWanted && Boolean(preview) && live(mic) && live(video),
       voice: voiceWanted && live(mic),
       audioMuted: live(mic) && mic.muted === true,
@@ -115,9 +112,10 @@ export function createCaptureSession({
 
   function cleanUnused() {
     if (take) return;
-    if (!cameraWanted) {
+    if (!cameraWanted && video) {
       drop(video);
       video = preview = null;
+      framing.attach(null);
     }
     if (!cameraWanted && !voiceWanted) {
       drop(mic);
@@ -160,8 +158,18 @@ export function createCaptureSession({
           throw new Error('Доступ к устройствам требует HTTPS и браузера с поддержкой камеры и микрофона.');
         }
         let acquired;
+        const constraints = { audio: needAudio, video: needVideo ? frontCamera(mobilePortrait()) : false };
         try {
-          acquired = await mediaDevices.getUserMedia({ audio: needAudio, video: needVideo ? frontCamera(mobilePortrait()) : false });
+          // Request the optional device zoom permission when the browser knows
+          // this constraint. The ordinary camera/recording path also works without it.
+          if (needVideo && mediaDevices.getSupportedConstraints?.().zoom) {
+            try {
+              acquired = await mediaDevices.getUserMedia({ ...constraints, video: { ...constraints.video, zoom: true } });
+            } catch (error) {
+              if (!current() || !['NotAllowedError', 'OverconstrainedError', 'TypeError', 'SecurityError'].includes(error?.name)) throw error;
+            }
+          }
+          if (!acquired) acquired = await mediaDevices.getUserMedia(constraints);
         } catch (error) {
           if (!current()) throw cancelled();
           throw deviceError(error);
@@ -175,7 +183,10 @@ export function createCaptureSession({
         }
         for (const track of acquired.getTracks()) {
           if (needAudio && track === audioTrack) mic = track;
-          else if (needVideo && track === videoTrack) video = track;
+          else if (needVideo && track === videoTrack) {
+            video = track;
+            framing.attach(track);
+          }
           else { track.stop(); continue; }
           watch(track);
         }
@@ -217,7 +228,7 @@ export function createCaptureSession({
     if (!getState().camera) throw new Error('Сначала включите камеру и разрешите микрофон.');
     if (mic.muted) throw new Error('Микрофон пока не передаёт звук. Проверьте его и повторите старт.');
     if (!Recorder) throw new Error('В этом браузере запись видео недоступна.');
-    const portrait = portraitTrack(previewElement, makeCanvas, () => {
+    const portrait = portraitTrack(previewElement, framing, makeCanvas, () => {
       onError('Не удалось получить следующий кадр. Завершаем дубль.');
       void stopRecording();
     });
@@ -316,6 +327,7 @@ export function createCaptureSession({
         drop(mic);
         entry.portrait.close();
         video = mic = preview = null;
+        framing.attach(null);
       }
     }
     changed();
@@ -334,6 +346,6 @@ export function createCaptureSession({
 
   return {
     enableCamera: () => acquire(true), acquireVoice: () => acquire(false),
-    releaseVoice, disableCamera, startRecording, stopRecording, close, getState,
+    releaseVoice, disableCamera, startRecording, stopRecording, close, getState, setZoom: framing.setZoom,
   };
 }

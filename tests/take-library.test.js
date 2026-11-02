@@ -77,6 +77,21 @@ test('durable takes restore metadata first, load one blob on selection and relea
   assert.equal(h.n('take-download').hidden, true);
 });
 
+test('opening after another recording selects the new take for review and export', async () => {
+  const h = harness();
+  await h.ui.restored;
+  await h.ui.add(video());
+  h.ui.open();
+  await tick();
+  const first = h.n('take-list').value;
+  h.n('take-close').fire('click');
+  await h.ui.add(video());
+  h.ui.open();
+  await tick();
+  assert.notEqual(h.n('take-list').value, first);
+  assert.equal(h.reads.at(-1), h.n('take-list').value);
+});
+
 test('quota failure leaves a downloadable local copy until expressly deleted', async () => {
   const h = harness({ write: async () => { throw new Error('QuotaExceededError'); } });
   await h.ui.restored;

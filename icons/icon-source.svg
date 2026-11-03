@@ -1,7 +1,9 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title">
-  <title id="title">Иконка телесуфлёра</title>
-  <rect width="512" height="512" rx="112" fill="#0b0d12"/>
-  <path d="M88 256h132M292 256h132" stroke="#f4f1ea" stroke-opacity=".52" stroke-width="12" stroke-linecap="round"/>
-  <circle cx="256" cy="256" r="26" fill="#ffb15a"/>
-  <circle cx="256" cy="256" r="52" fill="none" stroke="#ffb15a" stroke-opacity=".18" stroke-width="12"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 192 192" role="img" aria-labelledby="title">
+  <title id="title">Телесуфлёр — чёрный кот</title>
+  <rect width="192" height="192" fill="#FF655A"/>
+  <g id="cat">
+    <path fill="#211B1C" d="M68 128C48 130 33 120 31 105C28 93 36 86 32 81C28 76 18 83 16 94C11 119 27 144 59 150C57 153 55 155 51 158L59 158C58 161 54 165 52 167C71 170 90 170 106 169C132 168 151 165 164 156C157 147 154 137 155 123C161 110 163 96 159 83L159 54C159 41 158 28 154 26C150 25 134 42 123 56C112 53 98 53 87 56C77 47 61 34 57 35C52 37 54 61 57 76C52 88 54 102 60 111L55 111L63 119L59 120Z"/>
+    <path fill="#FFF0DD" d="M69 89Q83 94 101 90C100 100 94 107 84 106C76 105 71 100 69 89ZM113 87Q130 88 146 80C146 91 141 100 131 101C122 103 116 98 113 87Z"/>
+    <path fill="#211B1C" d="M80 89L90 89L90 94Q90 100 85 100Q80 100 80 94ZM123 85L133 82L133 90Q133 96 128 97Q123 97 123 91Z"/>
+  </g>
 </svg>

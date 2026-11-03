@@ -172,7 +172,8 @@ function updateConnectionBadge() {
 function applyTheme() {
   document.body.dataset.theme = appState.settings.theme;
   const themeMeta = document.querySelector('meta[name="theme-color"]');
-  themeMeta?.setAttribute('content', appState.settings.theme === 'light' ? '#ece8df' : '#0b0d12');
+  const readerColor = appState.settings.theme === 'light' ? '#ece8df' : '#0b0d12';
+  themeMeta?.setAttribute('content', elements.setupView.hidden ? readerColor : '#f8e4df');
 }
 
 function applyReaderAppearance() {
@@ -205,9 +206,13 @@ function syncControlsFromState() {
     input.checked = input.value === settings.theme;
   });
 
-  elements.speedOutput.textContent = `${settings.wpm} WPM`;
+  for (const range of [elements.speedInput, elements.fontInput, elements.lineHeightInput, elements.widthInput]) {
+    const fraction = (range.valueAsNumber - Number(range.min)) / (Number(range.max) - Number(range.min));
+    range.style.setProperty('--progress', `${fraction * 100}%`);
+  }
+  elements.speedOutput.textContent = `${settings.wpm} слов/мин`;
   elements.fontOutput.textContent = `${settings.fontSize} px`;
-  elements.lineHeightOutput.textContent = settings.lineHeight.toFixed(2);
+  elements.lineHeightOutput.textContent = settings.lineHeight.toLocaleString('ru-RU');
   elements.widthOutput.textContent = `${settings.columnWidth}%`;
   elements.readerSpeedOutput.textContent = String(settings.wpm);
   elements.readerFontOutput.textContent = String(settings.fontSize);
@@ -367,6 +372,7 @@ function enterReader(withCamera = false) {
   studio.render();
   elements.setupView.hidden = true;
   elements.readerView.hidden = false;
+  applyTheme();
   scrollEngine.pause();
   scrollEngine.restart();
   readerController.reset();
@@ -395,6 +401,7 @@ async function leaveReader() {
   void wakeLock.setReadingActive(false);
   elements.readerView.hidden = true;
   elements.setupView.hidden = false;
+  applyTheme();
   showControls({ autoHide: false });
   const fullscreenElement = document.fullscreenElement ?? document.webkitFullscreenElement;
   if (fullscreenElement) void exitDocumentFullscreen(document);

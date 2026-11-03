@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="154" viewBox="0 0 320 154" fill="none" aria-hidden="true">
+  <!-- The two pages and the cat share the same flat, cut-paper silhouette. -->
+  <g transform="rotate(-15 99 85)">
+    <path d="M41 20H143Q147 20 147 24V135Q147 139 143 139H41Q37 139 37 135V24Q37 20 41 20Z" fill="#E99485" stroke="#743F39" stroke-width="1.5"/>
+    <path d="M50 34H124M50 40H110" stroke="#A55E52" stroke-width="2.2" stroke-linecap="round"/>
+  </g>
+  <g transform="translate(153 -5) scale(.9)">
+    <path fill="#211B1C" d="M68 128C48 130 33 120 31 105C28 93 36 86 32 81C28 76 18 83 16 94C11 119 27 144 59 150C57 153 55 155 51 158L59 158C58 161 54 165 52 167C71 170 90 170 106 169C132 168 151 165 164 156C157 147 154 137 155 123C161 110 163 96 159 83L159 54C159 41 158 28 154 26C150 25 134 42 123 56C112 53 98 53 87 56C77 47 61 34 57 35C52 37 54 61 57 76C52 88 54 102 60 111L55 111L63 119L59 120Z"/>
+    <path fill="#FFF0DD" d="M69 89Q83 94 101 90C100 100 94 107 84 106C76 105 71 100 69 89ZM113 87Q130 88 146 80C146 91 141 100 131 101C122 103 116 98 113 87Z"/>
+    <path fill="#211B1C" d="M80 89L90 89L90 94Q90 100 85 100Q80 100 80 94ZM123 85L133 82L133 90Q133 96 128 97Q123 97 123 91Z"/>
+  </g>
+  <g transform="rotate(6 160 104)">
+    <path d="M89 42H197L217 62V139Q217 143 213 143H89Q85 143 85 139V46Q85 42 89 42Z" fill="#FFF0E1" stroke="#743F39" stroke-width="1.5" stroke-linejoin="round"/>
+    <path d="M197 42V59Q197 62 200 62H217" stroke="#743F39" stroke-width="1.5" stroke-linejoin="round"/>
+    <path d="M102 60H137" stroke="#482D2A" stroke-width="5" stroke-linecap="round"/>
+    <path d="M103 78H189M103 87H172M103 96H192M103 116H163M103 125H184" stroke="#BC8074" stroke-width="2.6" stroke-linecap="round"/>
+    <path d="M97 84L100 87L97 90" stroke="#A42F28" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <path d="M210 132C212 124 219 121 225 125C230 128 228 134 223 138C218 141 209 141 210 132Z" fill="#211B1C"/>
+</svg>

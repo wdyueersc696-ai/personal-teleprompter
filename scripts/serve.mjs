@@ -111,6 +111,6 @@ if (launchedDirectly) {
 
   server.listen(port, host, () => {
     const visibleHost = host === '0.0.0.0' ? 'localhost' : host;
-    process.stdout.write(`Teleprompter: http://${visibleHost}:${port}\n`);
+    process.stdout.write(`ReadReel: http://${visibleHost}:${port}\n`);
   });
 }

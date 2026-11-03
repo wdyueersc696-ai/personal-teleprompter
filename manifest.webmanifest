@@ -1,7 +1,7 @@
 {
   "id": "./",
-  "name": "Личный телесуфлёр",
-  "short_name": "Суфлёр",
+  "name": "ReadReel",
+  "short_name": "ReadReel",
   "description": "Локальный телесуфлёр для Reels, Shorts и видео.",
   "lang": "ru",
   "start_url": "./",

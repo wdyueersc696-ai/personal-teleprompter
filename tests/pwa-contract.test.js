@@ -11,7 +11,8 @@ const projectRoot = path.resolve(import.meta.dirname, '..');
 test('manifest describes an installable orientation-neutral app', async () => {
   const manifest = JSON.parse(await readFile(path.join(projectRoot, 'manifest.webmanifest'), 'utf8'));
 
-  assert.equal(manifest.name, 'Личный телесуфлёр');
+  assert.equal(manifest.name, 'ReadReel');
+  assert.equal(manifest.short_name, 'ReadReel');
   assert.equal(manifest.start_url, './');
   assert.equal(manifest.scope, './');
   assert.equal(manifest.display, 'standalone');
@@ -165,6 +166,7 @@ test('service worker activation deletes only older teleprompter caches', async (
         'teleprompter-shell-v7',
         'teleprompter-shell-v8',
         'teleprompter-shell-v9',
+        'teleprompter-shell-v10',
         'teleprompter-voice-models',
         'another-app-cache',
       ],
@@ -189,6 +191,7 @@ test('service worker activation deletes only older teleprompter caches', async (
     'teleprompter-shell-v6',
     'teleprompter-shell-v7',
     'teleprompter-shell-v8',
+    'teleprompter-shell-v9',
   ]);
 });
 

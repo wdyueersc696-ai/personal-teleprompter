@@ -2,12 +2,14 @@
 // to chrome.exe, then run node scripts/qa-studio.mjs from the project root.
 // Requires ffmpeg/ffprobe on PATH and a Russian Windows Desktop speech voice.
 // Other systems can supply QA_SPEECH_WAV (48 kHz PCM) containing phrases below.
+// Pass --camera-only for the file quality and physical-lens simulations without speech.
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import os from 'node:os';
 import { mkdtemp, readdir, unlink, rmdir } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+import { verifyCameraQuality } from './qa-camera-quality.mjs';
 import { createStaticServer } from './serve.mjs';
 
 const phrases = [
@@ -49,8 +51,8 @@ function speechFixture(dir) {
   return wav;
 }
 
-// The center target has a known width. Green marks on either side of the
-// 1× crop become visible at 0.5× if the wider source pixels are used.
+// The red target occupies 160 of the central 405 sensor pixels. Green marks
+// lie outside the portrait crop. All four corners of the picture are blue.
 function cameraFixture(dir) {
   const file = path.join(dir, 'camera.y4m');
   command('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'color=c=royalblue:s=1280x720:r=30',
@@ -96,43 +98,29 @@ async function downloadTake(page, directory) {
   return file;
 }
 
-async function testZoom(page, dir) {
+async function testFixedLens(page, dir) {
   const presets = page.locator('#camera-zoom button');
   assert.deepEqual(await presets.evaluateAll(buttons => buttons.map(b => b.dataset.zoom).sort()), ['0.5', '1']);
-  const preview = [];
+  assert.equal(await page.locator('[data-zoom="0.5"]').isDisabled(), true, 'fixed lens must not offer fake 0.5×');
+  assert.equal(await page.locator('[data-zoom="1"]').getAttribute('aria-pressed'), 'true');
   await page.locator('#record-button').click();
   await page.locator('#record-indicator').waitFor({ state: 'visible' });
-  for (const zoom of ['1', '0.5', '1']) {
-    const button = page.locator('#camera-zoom button[data-zoom="' + zoom + '"]');
-    await button.click();
-    await page.waitForFunction(z => document.querySelector('[data-zoom="' + z + '"]')?.getAttribute('aria-pressed') === 'true', zoom);
-    await page.waitForTimeout(500);
-    const shot = await page.locator('.camera-frame').screenshot();
-    const [frame] = measureTargets(shot, true);
-    // A 9:16 frame filled by a 1280×720 camera sees 405 source pixels at 1×.
-    assert.ok(Math.abs(frame.center - Number(zoom) * 160 / 405) < .02, 'unexpected target width at ' + zoom);
-    assert.ok(zoom === '0.5' ? frame.sides > .07 : frame.sides === 0, 'unexpected side marks at ' + zoom);
-    preview.push(frame);
-  }
+  await page.waitForTimeout(1000);
+  const [preview] = measureTargets(await page.locator('.camera-frame').screenshot(), true);
+  assert.ok(Math.abs(preview.center - 160 / 405) < .02 && preview.sides === 0, 'unexpected preview crop');
   await page.locator('#record-button').click();
   await page.locator('#record-indicator').waitFor({ state: 'hidden' });
   const file = await downloadTake(page, dir);
-  const encoded = measureTargets(file);
-  const exported = [];
-  let from = 0;
-  for (const sample of preview) {
-    const i = encoded.findIndex((frame, index) => index >= from
-      && Math.abs(frame.center - sample.center) < .02 && Math.abs(frame.sides - sample.sides) < .02);
-    assert.ok(i >= 0, 'export missing preview composition ' + JSON.stringify(sample));
-    exported.push(encoded[i]);
-    from = i + 1;
-  }
-  for (const frames of [preview, exported]) {
-    assert.ok(Math.abs(frames[1].center / frames[0].center - .5) < .04, '0.5× must halve the target width');
-    assert.ok(Math.abs(frames[2].center - frames[0].center) < .02, '1× must restore the opening composition');
+  const exported = measureTargets(file).find(frame => Math.abs(frame.center - preview.center) < .02 && frame.sides === 0);
+  assert.ok(exported, 'saved crop does not match preview');
+  const pixels = command('ffmpeg', ['-v', 'error', '-ss', '0.5', '-i', file, '-frames:v', '1',
+    '-an', '-vf', 'scale=90:160,format=rgb24', '-f', 'rawvideo', 'pipe:1'], { encoding: null }).stdout;
+  for (const [x, y] of [[1, 1], [88, 1], [1, 158], [88, 158]]) {
+    const i = (y * 90 + x) * 3;
+    assert.ok(pixels[i + 2] > 170 && pixels[i] < 100, 'letterbox or pillarbox at ' + [x, y]);
   }
   await page.locator('#take-close').click();
-  return { preview, exported };
+  return { preview, exported, corners: 'blue' };
 }
 
 async function countCameraLines(page) {
@@ -156,20 +144,23 @@ async function countCameraLines(page) {
   return results;
 }
 
-const dir = await mkdtemp(path.join(os.tmpdir(), 'teleprompter-studio-qa-'));
-const server = createStaticServer({ root: process.cwd() });
-let browser;
-try {
+async function runStudio({ chromium, directory: dir, appUrl }) {
   const wav = speechFixture(dir);
   const cameraFile = cameraFixture(dir);
-  const pw = process.env.PLAYWRIGHT_MODULE ? pathToFileURL(path.resolve(process.env.PLAYWRIGHT_MODULE)).href : 'playwright-core';
-  const { chromium } = await import(pw);
-  browser = await chromium.launch({
+  const browser = await chromium.launch({
     executablePath: process.env.CHROME_PATH,
     args: ['--use-fake-device-for-media-stream',
       '--use-file-for-fake-video-capture=' + cameraFile,
       '--use-file-for-fake-audio-capture=' + wav, '--autoplay-policy=no-user-gesture-required'],
   });
+  try {
+    await checkStudio({ chromium, browser, dir, appUrl });
+  } finally {
+    await browser.close();
+  }
+}
+
+async function checkStudio({ chromium, browser, dir, appUrl }) {
   const page = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, acceptDownloads: true });
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
@@ -180,8 +171,7 @@ try {
     navigator.mediaDevices.getUserMedia = async c => {
       // Some phones return landscape camera frames even in a portrait viewport.
       const stream = await get(c.video ? { ...c, video: { width: { exact: 1280 }, height: { exact: 720 } } } : c);
-      // This input represents a fixed-focal-length camera. Exercise the
-      // software fallback even if Chrome exposes synthetic zoom controls.
+      // The fixed-focal-length input has no device zoom.
       for (const track of stream.getVideoTracks()) {
         const capabilities = track.getCapabilities();
         delete capabilities.zoom;
@@ -202,8 +192,6 @@ try {
       }
     };
   });
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const appUrl = process.env.QA_APP_URL || 'http://127.0.0.1:' + server.address().port;
   const { origin } = new URL(appUrl);
   await page.context().grantPermissions(['camera', 'microphone'], { origin });
   await page.goto(appUrl);
@@ -212,7 +200,7 @@ try {
   await page.locator('#record-button:enabled').waitFor();
   assert.equal(await page.locator('#voice-toggle').isDisabled(), true);
   assert.equal(await page.locator('#camera-auto-toggle').isDisabled(), true);
-  const zoomWidths = await testZoom(page, dir);
+  const fixedLens = await testFixedLens(page, dir);
   await page.locator('#back-button').click();
   await page.locator('#script-input').fill(script);
   const speed = 100;
@@ -300,7 +288,8 @@ try {
     'stream=codec_type,codec_name,channels,width,height,avg_frame_rate:format=duration,size', '-of', 'json', file]).stdout);
   assert.deepEqual(probe.streams.map(x => x.codec_type).sort(), ['audio', 'video']);
   const video = probe.streams.find(x => x.codec_type === 'video');
-  assert.deepEqual([video.width, video.height], [720, 1280], 'downloaded take must be portrait');
+  assert.equal(video.width * 16, video.height * 9, 'downloaded take must be 9:16');
+  assert.ok(video.height <= 720, 'the landscape crop must not be enlarged');
   const decoded = command('ffmpeg', ['-hide_banner', '-i', file, '-vn', '-af', 'volumedetect', '-f', 'null', '-']);
   const maxVolume = Number(/max_volume:\s*(-?[\d.]+) dB/.exec(decoded.stderr)?.[1]);
   assert.ok(maxVolume > -60, 'saved recording has no audible signal');
@@ -313,8 +302,8 @@ try {
   const audit = await page.evaluate(() => window.captureAudit);
   // One capture in the empty-camera check and one for the entire recorded take.
   assert.equal(audit.audioRequests, 2);
-  assert.equal(audit.videoConstraints.width.ideal, 720);
-  assert.equal(audit.videoConstraints.height.ideal, 1280);
+  assert.equal(audit.videoConstraints.width.ideal, 1080);
+  assert.equal(audit.videoConstraints.height.ideal, 1920);
   assert.equal(audit.began, 2);
   assert.equal(audit.ended, 2);
   assert.deepEqual(audit.recordedAudio, audit.audioIds);
@@ -380,12 +369,24 @@ try {
   await page.locator('#back-button').click();
   await page.locator('#setup-view').waitFor({ state: 'visible' });
   assert.deepEqual(errors, []);
+  const quality = await verifyCameraQuality({ chromium, directory: dir, appUrl, downloadTake });
   console.log(JSON.stringify({ browser: browser.version(), speech: 'synthetic Russian voice, real local Vosk',
     progressDuringPause: paused, manualPosition: manual, maxVolume, maxAudioInterval, probe, audioCaptures: audit.audioRequests,
-    zoomWidths, viewports, measuredWpm, refusedPermission: true, cancelledExit: true, persistedAfterReload: true, timerMode: true,
+    fixedLens, quality, viewports, measuredWpm, refusedPermission: true, cancelledExit: true, persistedAfterReload: true, timerMode: true,
     survivedAsrFailure: true, keptRecordingAtScriptEnd: true }, null, 2));
+}
+
+const dir = await mkdtemp(path.join(os.tmpdir(), 'teleprompter-studio-qa-'));
+const server = createStaticServer({ root: process.cwd() });
+try {
+  const pw = process.env.PLAYWRIGHT_MODULE ? pathToFileURL(path.resolve(process.env.PLAYWRIGHT_MODULE)).href : 'playwright-core';
+  const { chromium } = await import(pw);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const appUrl = process.env.QA_APP_URL || 'http://127.0.0.1:' + server.address().port;
+  const options = { chromium, directory: dir, appUrl, downloadTake };
+  if (process.argv.includes('--camera-only')) console.log(JSON.stringify(await verifyCameraQuality(options), null, 2));
+  else await runStudio(options);
 } finally {
-  await browser?.close();
   if (server.listening) await new Promise(resolve => server.close(resolve));
   for (const file of await readdir(dir)) await unlink(path.join(dir, file));
   await rmdir(dir);

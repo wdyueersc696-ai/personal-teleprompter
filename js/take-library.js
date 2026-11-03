@@ -1,3 +1,5 @@
+import { readTakeFrameRate } from './take-frame-rate.js';
+
 const DB_NAME = 'teleprompter-recordings-v1';
 const META = 'metadata';
 const MEDIA = 'media';
@@ -73,6 +75,7 @@ export function createTakeLibrary({
   const dialog = byId('take-dialog');
   const list = byId('take-list');
   const player = byId('take-player');
+  const properties = byId('take-properties');
   const download = byId('take-download');
   const share = byId('take-share');
   const remove = byId('take-delete');
@@ -85,12 +88,21 @@ export function createTakeLibrary({
   let selection = 0;
   let newestUnopened = null;
   let listError = false;
+  let fileFps = null;
+  function showProperties() {
+    const size = player.videoWidth && player.videoHeight ? player.videoWidth + '×' + player.videoHeight : '';
+    const rate = fileFps ? fileFps.toLocaleString('ru-RU', { maximumFractionDigits: 1 }) + ' кадр/с в среднем' : '';
+    properties.textContent = url && (size || rate) ? 'Файл: ' + [size, rate].filter(Boolean).join(' · ') : '';
+  }
+  player.addEventListener('loadedmetadata', showProperties);
 
   function showLaunchers() {
     launchers.forEach(button => { button.hidden = entries.size === 0; });
   }
   function releasePlayer() {
     selection++;
+    fileFps = null;
+    properties.textContent = '';
     player.pause();
     player.removeAttribute('src');
     player.load();
@@ -117,6 +129,10 @@ export function createTakeLibrary({
       if (!blob?.size) throw new Error('Пустой файл');
       url = host.URL.createObjectURL(blob);
       player.src = url;
+      const stillSelected = () => selection === revision && dialog.open;
+      void readTakeFrameRate(blob, stillSelected).then(rate => {
+        if (stillSelected()) { fileFps = rate; showProperties(); }
+      });
       download.href = url;
       download.download = meta.name;
       download.hidden = false;

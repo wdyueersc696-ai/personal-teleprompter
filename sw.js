@@ -1,5 +1,5 @@
 const CACHE_PREFIX = 'teleprompter-shell-';
-const CACHE_NAME = `${CACHE_PREFIX}v7`;
+const CACHE_NAME = `${CACHE_PREFIX}v8`;
 const MODEL_PATH = './vendor/vosk-model-small-ru-0.22.tar.gz';
 const APP_SHELL = [
   './',
@@ -9,8 +9,10 @@ const APP_SHELL = [
   './js/app.js',
   './js/studio.js',
   './js/take-library.js',
+  './js/take-frame-rate.js',
   './js/capture-session.js',
   './js/camera-framing.js',
+  './js/camera-lenses.js',
   './js/speech-input.js',
   './js/speech-model-cache.js',
   './js/speech-processor.js',
@@ -38,7 +40,7 @@ self.addEventListener('install', (event) => {
 
 async function activate() {
   const names = await caches.keys();
-  const previousShell = ['teleprompter-shell-v6', 'teleprompter-shell-v5'].find(name => names.includes(name));
+  const previousShell = ['teleprompter-shell-v7', 'teleprompter-shell-v6', 'teleprompter-shell-v5'].find(name => names.includes(name));
   if (previousShell) {
     // These releases share the same pinned voice engine. Keep it available offline.
     for (const asset of ['./vendor/vosk-0.0.8-mobile.js', './vendor/vosk-worker-0.0.8-mobile.js']) {

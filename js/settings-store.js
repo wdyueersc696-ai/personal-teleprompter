@@ -11,6 +11,7 @@ const DEFAULT_SETTINGS = Object.freeze({
   theme: 'dark',
   mirror: false,
   focusMode: true,
+  frameRate: 30,
 });
 
 export const DEFAULT_STATE = Object.freeze({
@@ -70,6 +71,7 @@ export function normalizeState(candidate) {
       theme: settings.theme === 'light' ? 'light' : 'dark',
       mirror: Boolean(settings.mirror ?? DEFAULT_SETTINGS.mirror),
       focusMode: Boolean(settings.focusMode ?? DEFAULT_SETTINGS.focusMode),
+      frameRate: Number(settings.frameRate) === 60 ? 60 : 30,
     },
   };
 }

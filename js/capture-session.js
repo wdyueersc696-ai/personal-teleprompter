@@ -1,23 +1,48 @@
 import { createCameraFraming } from './camera-framing.js';
+import { discoverCameraLenses } from './camera-lenses.js';
 
 // The camera owns a pair of device tracks. Speech borrows the microphone;
 // releasing that lease must never stop or replace the recorder's audio track.
-function frontCamera(portrait) {
+function cameraConstraints(portrait, fps, facing, deviceId, exactFacing) {
   return {
-    facingMode: { ideal: 'user' },
-    width: { ideal: portrait ? 720 : 1280 }, height: { ideal: portrait ? 1280 : 720 },
+    ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+    facingMode: { [exactFacing ? 'exact' : 'ideal']: facing },
+    width: { ideal: portrait ? 1080 : 1920 }, height: { ideal: portrait ? 1920 : 1080 },
+    frameRate: { ideal: fps },
     resizeMode: { ideal: 'none' },
   };
 }
-const formats = ['video/mp4;codecs=avc1.42E01E,mp4a.40.2', 'video/webm;codecs=vp8,opus', 'video/mp4', 'video/webm'];
+// Let the encoder select an AVC level suitable for the actual resolution and fps.
+const formats = ['video/mp4;codecs=avc1,mp4a.40.2', 'video/mp4', 'video/webm;codecs=vp8,opus', 'video/webm'];
 const live = track => track?.readyState === 'live';
 const cancelled = () => new DOMException('Запрос отменён.', 'AbortError');
+
+function videoConstraintsOnly(track) {
+  const { advanced = [], ...basic } = track.getConstraints?.() ?? {};
+  // Some browsers handle zoom and video-format constraints in separate subsystems.
+  for (const key of ['zoom', 'pan', 'tilt']) delete basic[key];
+  const entries = advanced.map(({ zoom, pan, tilt, ...video }) => video).filter(item => Object.keys(item).length);
+  return entries.length ? { ...basic, advanced: entries } : basic;
+}
+
+function recordingProfile(source, track, fps) {
+  const settings = track?.getSettings?.() ?? {};
+  const sourceWidth = track ? source?.videoWidth || settings.width || 0 : 0;
+  const sourceHeight = track ? source?.videoHeight || settings.height || 0 : 0;
+  const sourceFps = settings.frameRate > 0 ? settings.frameRate : 0;
+  // A 9:16 crop of a horizontal frame contains fewer pixels. Emit an exact,
+  // even-sized 9:16 frame up to Full HD, without stretching that crop to 1080p.
+  const units = Math.floor(Math.min(60, sourceWidth / 18, sourceHeight / 32));
+  return { sourceWidth, sourceHeight, sourceFps,
+    outputWidth: units * 18, outputHeight: units * 32, outputFps: Math.min(fps, sourceFps || fps) };
+}
 
 function deviceError(error) {
   switch (error?.name) {
     case 'NotAllowedError':
     case 'SecurityError': return new Error('Разрешите доступ к запрошенным устройствам в настройках сайта.');
     case 'NotFoundError': return new Error('Камера или микрофон не найдены. Проверьте подключение.');
+    case 'OverconstrainedError': return new Error('Браузер не предоставил выбранную камеру или режим.');
     case 'NotReadableError': return new Error('Камера или микрофон заняты. Закройте другое приложение и повторите.');
     default: return new Error('Не удалось получить доступ к устройству. Проверьте разрешения и повторите.');
   }
@@ -25,16 +50,29 @@ function deviceError(error) {
 
 // Draw only the decoded camera image. Its intrinsic dimensions already include
 // presentation rotation. The framing controller is shared with the live preview.
-function portraitTrack(source, framing, makeCanvas, onFrameError) {
+function portraitTrack(source, deviceTrack, framing, profile, makeCanvas, onFrameError) {
   if (!source || source.readyState < 2 || !source.videoWidth || !source.videoHeight) {
     throw new Error('Дождитесь изображения с камеры и нажмите запись ещё раз.');
   }
+  const { outputWidth, outputHeight, outputFps, sourceFps } = profile;
+  if (!outputWidth) throw new Error('Камера не передаёт кадр подходящего размера.');
+  const settings = deviceTrack.getSettings?.() ?? {};
+  if (settings.width === outputWidth && settings.height === outputHeight &&
+      source.videoWidth === outputWidth && source.videoHeight === outputHeight && sourceFps && sourceFps <= outputFps) {
+    const checkSize = () => {
+      if (source.videoWidth !== outputWidth || source.videoHeight !== outputHeight) {
+        onFrameError('Ориентация камеры изменилась. Завершаем вертикальный дубль.');
+      }
+    };
+    source.addEventListener('resize', checkSize);
+    return { track: deviceTrack, close: () => source.removeEventListener('resize', checkSize) };
+  }
   const canvas = makeCanvas();
-  canvas.width = framing.width;
-  canvas.height = framing.height;
+  canvas.width = outputWidth;
+  canvas.height = outputHeight;
   const context = canvas.getContext('2d', { alpha: false });
   if (!context || !canvas.captureStream) throw new Error('Этот браузер не поддерживает вертикальную видеозапись.');
-  const [track] = canvas.captureStream(30).getVideoTracks();
+  const [track] = canvas.captureStream(outputFps).getVideoTracks();
   if (!live(track)) throw new Error('Не удалось создать вертикальную видеодорожку.');
   const useVideoFrames = typeof source.requestVideoFrameCallback === 'function';
   let callback = null;
@@ -43,7 +81,7 @@ function portraitTrack(source, framing, makeCanvas, onFrameError) {
     callback = useVideoFrames ? source.requestVideoFrameCallback(next) : requestAnimationFrame(next);
   }
   function next() {
-    try { framing.draw(context); schedule(); }
+    try { framing.draw(context, outputWidth, outputHeight); schedule(); }
     catch { onFrameError(); }
   }
   function close() {
@@ -55,7 +93,7 @@ function portraitTrack(source, framing, makeCanvas, onFrameError) {
     track.stop();
     canvas.width = canvas.height = 0;
   }
-  try { framing.draw(context); schedule(); }
+  try { framing.draw(context, outputWidth, outputHeight); schedule(); }
   catch {
     close();
     throw new Error('Не удалось получить вертикальный кадр с камеры.');
@@ -68,6 +106,7 @@ export function createCaptureSession({
   Recorder = globalThis.MediaRecorder,
   Stream = globalThis.MediaStream,
   previewElement,
+  frameRate: initialFrameRate = 30,
   makeCanvas = () => document.createElement('canvas'),
   mobilePortrait = () => globalThis.matchMedia?.('(orientation: portrait) and (pointer: coarse)').matches === true,
   now = () => performance.now(),
@@ -82,13 +121,26 @@ export function createCaptureSession({
   let cameraVersion = 0;
   let voiceVersion = 0;
   let queue = Promise.resolve();
+  let frameRate = Number(initialFrameRate) === 60 ? 60 : 30;
+  let facingMode = 'user';
+  let lenses = {};
+  let cameraChanging = false;
+  let nativeZoomPending = 0;
+  const attemptedSensorUpgrade = new WeakMap();
   const endedHandlers = new Map();
   const framing = createCameraFraming(previewElement, changed);
 
   function getState() {
+    const optics = framing.state();
     return {
-      ...framing.state(),
-      camera: cameraWanted && Boolean(preview) && live(mic) && live(video),
+      ...optics, frameRate, facingMode, cameraChanging: cameraChanging || nativeZoomPending > 0,
+      ...recordingProfile(previewElement, video, frameRate),
+      ...(take ? take.profile : {}),
+      wideAvailable: optics.hardwareWideAvailable || !!lenses.wideDeviceId || optics.zoom === 0.5,
+      oneAvailable: optics.zoom === 1 || optics.hardwareWideAvailable || !!lenses.standardDeviceId,
+      wideRequiresSwitch: !optics.hardwareWideAvailable,
+      canFlip: !!lenses.canFlip,
+      camera: cameraWanted && Boolean(preview) && live(mic) && (live(video) || cameraChanging),
       voice: voiceWanted && live(mic),
       audioMuted: live(mic) && mic.muted === true,
       videoMuted: live(video) && video.muted === true,
@@ -112,9 +164,10 @@ export function createCaptureSession({
 
   function cleanUnused() {
     if (take) return;
-    if (!cameraWanted && video) {
+    if (!cameraWanted && (video || preview)) {
       drop(video);
       video = preview = null;
+      lenses = {};
       framing.attach(null);
     }
     if (!cameraWanted && !voiceWanted) {
@@ -142,6 +195,70 @@ export function createCaptureSession({
     endedHandlers.set(track, ended);
   }
 
+  async function openDevices({ audio, withVideo, facing = facingMode, deviceId = '', exactFacing = false }, current) {
+    if (!mediaDevices?.getUserMedia || !Stream) {
+      throw new Error('Доступ к устройствам требует HTTPS и браузера с поддержкой камеры и микрофона.');
+    }
+    const constraints = { audio, video: withVideo ? cameraConstraints(mobilePortrait(), frameRate, facing, deviceId, exactFacing) : false };
+    let acquired;
+    try {
+      if (withVideo && mediaDevices.getSupportedConstraints?.().zoom) {
+        try {
+          acquired = await mediaDevices.getUserMedia({ ...constraints,
+            video: { ...constraints.video, facingMode: { exact: facing }, zoom: true } });
+        } catch (error) {
+          if (!current() || !['NotAllowedError', 'NotFoundError', 'OverconstrainedError', 'TypeError', 'SecurityError'].includes(error?.name)) throw error;
+        }
+      }
+      acquired ??= await mediaDevices.getUserMedia(constraints);
+    } catch (error) {
+      if (!current()) throw cancelled();
+      throw deviceError(error);
+    }
+    const videoTrack = acquired.getVideoTracks()[0], audioTrack = acquired.getAudioTracks()[0];
+    if (!current() || (audio && !live(audioTrack)) || (withVideo && !live(videoTrack))) {
+      acquired.getTracks().forEach(track => track.stop());
+      if (!current()) throw cancelled();
+      throw new Error('Браузер не вернул запрошенную аудио- или видеодорожку.');
+    }
+    const settings = videoTrack?.getSettings?.() ?? {};
+    if ((deviceId && settings.deviceId && settings.deviceId !== deviceId) ||
+        (exactFacing && settings.facingMode && settings.facingMode !== facing)) {
+      acquired.getTracks().forEach(track => track.stop());
+      throw new Error('Браузер вернул другую камеру. Выбранный объектив недоступен.');
+    }
+    // Stop extra tracks in a nonstandard stream. Retain only requested tracks.
+    for (const track of acquired.getTracks()) {
+      if (!(withVideo && track === videoTrack) && !(audio && track === audioTrack)) track.stop();
+    }
+    return { videoTrack, audioTrack };
+  }
+
+  async function useCamera(track, facing, current) {
+    try {
+      const fps = track.getSettings?.().frameRate;
+      if (current() && frameRate === 60 && fps > 0 && fps < 59.7 && track.applyConstraints &&
+          track.getCapabilities?.().frameRate?.max >= 59.7) {
+        try { await track.applyConstraints({ ...videoConstraintsOnly(track), frameRate: { min: 59.7, ideal: 60 } }); }
+        catch { /* Device may only offer 60 in a format currently unavailable. */ }
+      }
+      const discovered = await discoverCameraLenses(mediaDevices, track, facing);
+      if (!current() || !live(track)) throw cancelled();
+      video = track;
+      watch(track);
+      if (lenses.facingMode === discovered.facingMode && discovered.activePreset === 0.5) {
+        discovered.standardDeviceId ||= lenses.standardDeviceId;
+      }
+      lenses = discovered;
+      facingMode = discovered.facingMode || facing;
+      framing.attach(track, discovered.activePreset);
+      preview = new Stream([mic, video]);
+    } catch (error) {
+      drop(track);
+      throw error;
+    }
+  }
+
   function acquire(forCamera) {
     if (forCamera) cameraWanted = true;
     else voiceWanted = true;
@@ -154,46 +271,14 @@ export function createCaptureSession({
       const needAudio = !live(mic);
       const needVideo = forCamera && !live(video);
       if (needAudio || needVideo) {
-        if (!mediaDevices?.getUserMedia || !Stream) {
-          throw new Error('Доступ к устройствам требует HTTPS и браузера с поддержкой камеры и микрофона.');
+        const { audioTrack, videoTrack } = await openDevices({ audio: needAudio, withVideo: needVideo }, current);
+        if (!current()) {
+          if (needAudio) audioTrack.stop();
+          if (needVideo) videoTrack.stop();
+          throw cancelled();
         }
-        let acquired;
-        const constraints = { audio: needAudio, video: needVideo ? frontCamera(mobilePortrait()) : false };
-        try {
-          // Request the optional device zoom permission when the browser knows
-          // this constraint. The ordinary camera/recording path also works without it.
-          if (needVideo && mediaDevices.getSupportedConstraints?.().zoom) {
-            try {
-              // A rear camera may advertise a wider zoom range. Prefer a selfie
-              // camera with zoom, then a regular selfie camera as below.
-              acquired = await mediaDevices.getUserMedia({
-                ...constraints, video: { ...constraints.video, facingMode: { exact: 'user' }, zoom: true },
-              });
-            } catch (error) {
-              if (!current() || !['NotAllowedError', 'NotFoundError', 'OverconstrainedError', 'TypeError', 'SecurityError'].includes(error?.name)) throw error;
-            }
-          }
-          if (!acquired) acquired = await mediaDevices.getUserMedia(constraints);
-        } catch (error) {
-          if (!current()) throw cancelled();
-          throw deviceError(error);
-        }
-        const audioTrack = acquired.getAudioTracks()[0];
-        const videoTrack = acquired.getVideoTracks()[0];
-        if (!current() || (needAudio && !live(audioTrack)) || (needVideo && !live(videoTrack))) {
-          acquired.getTracks().forEach(track => track.stop());
-          if (!current()) throw cancelled();
-          throw new Error('Браузер не вернул запрошенную аудио- или видеодорожку.');
-        }
-        for (const track of acquired.getTracks()) {
-          if (needAudio && track === audioTrack) mic = track;
-          else if (needVideo && track === videoTrack) {
-            video = track;
-            framing.attach(track);
-          }
-          else { track.stop(); continue; }
-          watch(track);
-        }
+        if (needAudio) { mic = audioTrack; watch(mic); }
+        if (needVideo) await useCamera(videoTrack, facingMode, current);
       }
       if (forCamera && !preview) preview = new Stream([mic, video]);
       changed();
@@ -227,25 +312,190 @@ export function createCaptureSession({
     return true;
   }
 
+  function changeCamera(action) {
+    if (take || cameraChanging || nativeZoomPending) return Promise.reject(new Error('Измените камеру или частоту кадров между дублями.'));
+    const version = cameraVersion;
+    const current = () => version === cameraVersion;
+    cameraChanging = true;
+    changed();
+    const request = queue.then(() => {
+      if (!current()) throw cancelled();
+      return action(current);
+    }).finally(() => {
+      cameraChanging = false;
+      cleanUnused();
+      changed();
+      queueMicrotask(improveLandscapeCrop);
+    });
+    queue = request.catch(() => {});
+    return request;
+  }
+
+  async function replaceCamera(facing, deviceId, current, expectedPreset) {
+    const previous = { facing: facingMode, deviceId: lenses.activeDeviceId, zoom: framing.state().zoom };
+    // Some iPhones allow only one open camera. Release this video track while
+    // the shared microphone continues to feed speech. Restore the old lens on failure.
+    drop(video);
+    video = null;
+    async function select(side, id, expected) {
+      const { videoTrack } = await openDevices({ audio: false, withVideo: true, facing: side, deviceId: id, exactFacing: true }, current);
+      await useCamera(videoTrack, side, current);
+      if (facingMode !== side || (expected && framing.state().zoom !== expected)) {
+        drop(video);
+        video = null;
+        throw new Error('Браузер не подтвердил переключение объектива.');
+      }
+    }
+    try { await select(facing, deviceId, expectedPreset); }
+    catch (error) {
+      if (!current()) throw cancelled();
+      try {
+        await select(previous.facing, previous.deviceId);
+        if (previous.zoom !== framing.state().zoom && framing.state().hardwareWideAvailable) await framing.setZoom(previous.zoom);
+      } catch {
+        if (!current()) throw cancelled();
+        cameraWanted = false;
+        preview = null;
+        lenses = {};
+        framing.attach(null);
+        throw new Error('Не удалось открыть объектив или вернуться к предыдущему. Включите камеру ещё раз.');
+      }
+      throw error;
+    }
+  }
+
+  function setFacingMode(facing) {
+    if (facing !== 'user' && facing !== 'environment') return Promise.reject(new Error('Неизвестная камера.'));
+    if (facingMode === facing) return Promise.resolve();
+    return changeCamera(async current => {
+      if (live(video)) await replaceCamera(facing, '', current);
+      else facingMode = facing;
+    });
+  }
+
+  async function setZoom(value) {
+    const preset = Number(value);
+    if (![0.5, 1].includes(preset)) return Promise.reject(new Error('Неизвестный масштаб камеры.'));
+    if (!live(video) || cameraChanging) return Promise.reject(new Error('Дождитесь включения камеры.'));
+    if (framing.state().hardwareWideAvailable) {
+      // The same source track stays connected to the recorder throughout.
+      nativeZoomPending++;
+      changed();
+      try { return await framing.setZoom(preset); }
+      catch (error) {
+        if (take || !lenses.wideDeviceId || framing.state().hardwareWideAvailable) throw error;
+      } finally { nativeZoomPending--; changed(); }
+    }
+    if (preset === framing.state().zoom) return Promise.resolve();
+    const id = preset === 0.5 ? lenses.wideDeviceId : lenses.standardDeviceId;
+    if (!id) return Promise.reject(new Error('Эта камера не предоставляет выбранный угол обзора.'));
+    return changeCamera(current => replaceCamera(facingMode, id, current, preset));
+  }
+
+  function setFrameRate(value) {
+    const fps = Number(value);
+    if (![30, 60].includes(fps)) return Promise.reject(new Error('Выберите 30 или 60 кадров/с.'));
+    if (frameRate === fps) return Promise.resolve();
+    return changeCamera(async current => {
+      // A preference is allowed to negotiate down, including 60 -> 30.
+      // Merge with the current constraints to preserve zoom and lens settings.
+      const track = video;
+      if (!live(track)) { frameRate = fps; return; }
+      const initialZoom = track.getSettings?.().zoom;
+      const currentPreset = framing.state().zoom;
+      const defaults = cameraConstraints(mobilePortrait(), fps, facingMode, '', false);
+      let applied = false;
+      if (track.applyConstraints) {
+        // A 4K30 source may also provide 1080p60. Prefer the selected cadence.
+        const base = { ...videoConstraintsOnly(track), width: defaults.width, height: defaults.height };
+        for (const rate of [{ min: fps * 0.995, ideal: fps }, { ideal: fps }]) {
+          try { await track.applyConstraints({ ...base, frameRate: rate }); applied = true; }
+          catch { /* Fall back to the best rate available. */ }
+          if (!current()) throw cancelled();
+          if (applied) break;
+        }
+      }
+      if (applied) {
+        frameRate = fps;
+        if (Number.isFinite(initialZoom) && initialZoom !== track.getSettings().zoom) {
+          // Format changes may reset a camera's zoom. Report the new default
+          // immediately, then restore the requested wider angle if possible.
+          framing.attach(track, lenses.activePreset);
+          if (currentPreset !== lenses.activePreset && framing.state().hardwareWideAvailable) {
+            await framing.setZoom(currentPreset);
+          }
+        }
+      } else {
+        const previousRate = frameRate;
+        frameRate = fps;
+        try { await replaceCamera(facingMode, lenses.activeDeviceId, current); }
+        catch (error) { frameRate = previousRate; throw error; }
+        if (currentPreset !== framing.state().zoom && framing.state().hardwareWideAvailable) {
+          await framing.setZoom(currentPreset);
+        }
+      }
+    });
+  }
+
+  // In portrait, some browsers still supply a landscape sensor. A center crop
+  // of 1920×1080 contains only ~608×1080 pixels. If the device advertises a
+  // taller native source, try it once per track and cadence, before recording.
+  function improveLandscapeCrop() {
+    const track = video;
+    if (!live(track) || !cameraWanted || take || cameraChanging || nativeZoomPending || !track.applyConstraints ||
+        previewElement?.srcObject !== preview || !previewElement.videoHeight ||
+        previewElement.videoWidth <= previewElement.videoHeight || previewElement.videoHeight >= 1920 ||
+        framing.state().zoom !== lenses.activePreset || attemptedSensorUpgrade.get(track) === frameRate) return;
+    const caps = track.getCapabilities?.() ?? {};
+    if (!(caps.width?.max >= 1920 && caps.height?.max >= 1920)) return;
+    attemptedSensorUpgrade.set(track, frameRate);
+    void changeCamera(async current => {
+      if (!current() || video !== track) return;
+      const settings = track.getSettings?.() ?? {};
+      const goalRate = Math.min(frameRate, settings.frameRate || frameRate);
+      const base = videoConstraintsOnly(track);
+      try {
+        await track.applyConstraints({ ...base, width: { ideal: Math.min(3840, caps.width.max) },
+          height: { min: 1920, ideal: Math.min(2160, caps.height.max) },
+          frameRate: { min: goalRate * 0.995, ideal: frameRate }, resizeMode: { ideal: 'none' } });
+        if (!current()) return;
+        const actual = track.getSettings?.().frameRate;
+        if (actual && actual < goalRate * 0.995) await track.applyConstraints(base);
+        if (current() && Number.isFinite(settings.zoom) && settings.zoom !== track.getSettings?.().zoom) {
+          framing.attach(track, lenses.activePreset);
+        }
+      } catch { /* The original camera format remains usable. */ }
+    }).catch(() => {});
+  }
+  previewElement?.addEventListener?.('loadedmetadata', improveLandscapeCrop);
+  previewElement?.addEventListener?.('resize', improveLandscapeCrop);
+
   function startRecording() {
     if (take) throw new Error('Сначала завершите текущую запись.');
+    if (cameraChanging || nativeZoomPending) throw new Error('Дождитесь переключения камеры.');
     if (!getState().camera) throw new Error('Сначала включите камеру и разрешите микрофон.');
     if (mic.muted) throw new Error('Микрофон пока не передаёт звук. Проверьте его и повторите старт.');
     if (!Recorder) throw new Error('В этом браузере запись видео недоступна.');
-    const portrait = portraitTrack(previewElement, framing, makeCanvas, () => {
-      onError('Не удалось получить следующий кадр. Завершаем дубль.');
+    const profile = recordingProfile(previewElement, video, frameRate);
+    const portrait = portraitTrack(previewElement, video, framing, profile, makeCanvas, message => {
+      onError(message || 'Не удалось получить следующий кадр. Завершаем дубль.');
       void stopRecording();
     });
     let recorder;
     try {
-      const mimeType = formats.find(type => Recorder.isTypeSupported?.(type));
       const output = new Stream([mic, portrait.track]);
-      recorder = mimeType ? new Recorder(output, { mimeType }) : new Recorder(output);
+      // MediaRecorder rates are encoder targets. Leave room for motion at 60 fps.
+      const videoBitsPerSecond = Math.max(1_000_000, Math.round(profile.outputWidth * profile.outputHeight * profile.outputFps * 0.18));
+      const rates = { videoBitsPerSecond, audioBitsPerSecond: 192_000 };
+      for (const mimeType of formats.filter(type => Recorder.isTypeSupported?.(type))) {
+        try { recorder = new Recorder(output, { mimeType, ...rates }); break; } catch { /* Try another encoder. */ }
+      }
+      recorder ??= new Recorder(output, rates);
     } catch {
       portrait.close();
       throw new Error('Браузеру не удалось настроить запись видео со звуком.');
     }
-    const entry = { recorder, portrait, chunks: [], phase: 'starting', startedAt: null, stoppedAt: null, timeout: null };
+    const entry = { recorder, portrait, profile, chunks: [], phase: 'starting', startedAt: null, stoppedAt: null, timeout: null };
     entry.done = new Promise(resolve => { entry.resolve = resolve; });
     take = entry;
     recorder.onstart = () => {
@@ -350,6 +600,6 @@ export function createCaptureSession({
 
   return {
     enableCamera: () => acquire(true), acquireVoice: () => acquire(false),
-    releaseVoice, disableCamera, startRecording, stopRecording, close, getState, setZoom: framing.setZoom,
+    releaseVoice, disableCamera, startRecording, stopRecording, close, getState, setZoom, setFrameRate, setFacingMode,
   };
 }

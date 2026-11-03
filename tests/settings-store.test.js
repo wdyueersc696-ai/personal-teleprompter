@@ -56,6 +56,7 @@ test('normalizeState preserves a script and clamps unsafe settings', () => {
       theme: 'light',
       mirror: true,
       focusMode: false,
+      frameRate: 30,
     },
   });
 });
@@ -81,13 +82,14 @@ test('loadAppState restores valid JSON without recovery warning', () => {
   storage.setItem(STORAGE_KEY, JSON.stringify({
     version: 1,
     script: 'Сохранено',
-    settings: { wpm: 180 },
+    settings: { wpm: 180, frameRate: 60 },
   }));
 
   const result = loadAppState(storage);
 
   assert.equal(result.state.script, 'Сохранено');
   assert.equal(result.state.settings.wpm, 180);
+  assert.equal(result.state.settings.frameRate, 60);
   assert.equal(result.state.settings.fontSize, DEFAULT_STATE.settings.fontSize);
   assert.equal(result.recovered, false);
 });

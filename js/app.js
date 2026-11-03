@@ -137,6 +137,8 @@ function updateWake() {
 }
 studio = createStudio({
   view: elements.readerView, viewport: elements.readerScroll, article: elements.readerText,
+  frameRate: appState.settings.frameRate,
+  saveFrameRate: value => setSetting('frameRate', value),
   pauseReading: () => readerController.pause(),
   onVoiceStart: () => { automaticCameraPreview = false; },
   resumeTempo: () => readerController.start(0),

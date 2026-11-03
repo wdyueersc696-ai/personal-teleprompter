@@ -46,6 +46,7 @@ test('every runtime shell asset is served successfully', async () => {
     './js/take-library.js',
     './js/capture-session.js',
     './js/camera-framing.js',
+    './js/camera-lenses.js',
     './js/speech-input.js',
     './js/speech-processor.js',
     './js/voice-match.js',
@@ -162,6 +163,7 @@ test('service worker activation deletes only older teleprompter caches', async (
         'teleprompter-shell-v5',
         'teleprompter-shell-v6',
         'teleprompter-shell-v7',
+        'teleprompter-shell-v8',
         'teleprompter-voice-models',
         'another-app-cache',
       ],
@@ -184,6 +186,7 @@ test('service worker activation deletes only older teleprompter caches', async (
     'teleprompter-shell-v4',
     'teleprompter-shell-v5',
     'teleprompter-shell-v6',
+    'teleprompter-shell-v7',
   ]);
 });
 

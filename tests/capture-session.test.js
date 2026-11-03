@@ -29,7 +29,7 @@ function harness(options = {}) {
     const canvas = {
       track: new Track('video'), draws: [], fills: [],
       getContext() { return { drawImage: (...args) => this.draws.push(args), fillRect: (...args) => this.fills.push(args) }; },
-      captureStream() { return new Stream([this.track]); },
+      captureStream(fps) { this.fps = fps; return new Stream([this.track]); },
     };
     canvases.push(canvas);
     return canvas;
@@ -37,7 +37,7 @@ function harness(options = {}) {
   let time = 100;
   class Recorder {
     static isTypeSupported(type) { return type.startsWith('video/webm'); }
-    constructor(stream, { mimeType }) { Object.assign(this, { stream, mimeType, state: 'inactive' }); recorders.push(this); }
+    constructor(stream, options) { Object.assign(this, { stream, ...options, state: 'inactive' }); recorders.push(this); }
     start() { this.state = 'recording'; }
     stop() { this.state = 'inactive'; }
     deliver(chunk = 'captured') {
@@ -193,19 +193,19 @@ test('empty recorder output produces an error rather than an invalid download', 
 test('mobile portrait requests upright framing without mandatory size or orientation', async () => {
   const { calls, session } = harness({ mobilePortrait: () => true });
   await session.enableCamera();
-  assert.deepEqual(calls[0].video, { facingMode: { ideal: 'user' }, width: { ideal: 720 }, height: { ideal: 1280 }, resizeMode: { ideal: 'none' } });
+  assert.deepEqual(calls[0].video, { facingMode: { ideal: 'user' }, width: { ideal: 1080 }, height: { ideal: 1920 }, frameRate: { ideal: 30 }, resizeMode: { ideal: 'none' } });
   await session.close();
 });
 
-test('a landscape sensor is center-cropped to 720 by 1280 and rotation cannot change the encoded frame', async () => {
+test('a landscape sensor is center-cropped without upscaling and rotation cannot change the encoded frame', async () => {
   const { session, canvases, previewElement, frames, recorders } = harness();
   const stream = await session.enableCamera();
   session.startRecording();
   const [canvas] = canvases;
   const [rec] = recorders;
-  assert.deepEqual([canvas.width, canvas.height], [720, 1280]);
-  const coveredWidth = 1280 * (1280 / 720);
-  assert.deepEqual(canvas.draws[0], [previewElement, (720 - coveredWidth) / 2, 0, coveredWidth, 1280]);
+  assert.deepEqual([canvas.width, canvas.height], [396, 704]);
+  const coveredWidth = 1280 * (704 / 720);
+  assert.deepEqual(canvas.draws[0], [previewElement, (396 - coveredWidth) / 2, 0, coveredWidth, 704]);
   assert.equal(rec.stream.getVideoTracks()[0], canvas.track);
   assert.equal(rec.stream.getAudioTracks()[0], stream.getAudioTracks()[0]);
   previewElement.videoWidth = 900;
@@ -213,7 +213,7 @@ test('a landscape sensor is center-cropped to 720 by 1280 and rotation cannot ch
   const [id, paint] = frames.entries().next().value;
   frames.delete(id);
   paint();
-  assert.deepEqual(canvas.draws[1], [previewElement, 0, -80, 720, 1440]);
+  assert.deepEqual(canvas.draws[1], [previewElement, 0, -44, 396, 792]);
   const stop = session.stopRecording();
   rec.deliver();
   await stop;
@@ -234,52 +234,20 @@ test('recording waits for a decoded frame and never silently falls back to a lan
   await session.close();
 });
 
-test('0.5× halves subject size, reveals extra source pixels, and switches back during the same take', async () => {
-  const { session, previewElement, calls, recorders, canvases, frames } = harness();
+test('an ordinary camera never fabricates a wider angle with dark fields', async () => {
+  const { session, previewElement, canvases, recorders } = harness();
   await session.enableCamera();
   for (const invalid of ['wide', 1.5, 2]) await assert.rejects(session.setZoom(invalid), /масштаб/);
-  await session.setZoom('0.5');
-  session.startRecording();
-  const [canvas] = canvases;
-  assert.equal(session.getState().zoom, 0.5);
-  assert.equal(session.getState().zoomMode, 'digital');
-  const halfWidth = 1280 * (1280 / 720) * 0.5;
-  assert.equal(parseFloat(previewElement.style['--camera-image-width']), halfWidth / 720 * 100);
-  assert.equal(previewElement.style['--camera-image-height'], '50%');
-  assert.deepEqual(canvas.fills[0], [0, 0, 720, 1280]);
-  assert.deepEqual(canvas.draws[0], [previewElement, (720 - halfWidth) / 2, 320, halfWidth, 640]);
-  await session.setZoom('1');
-  const [id, paint] = frames.entries().next().value;
-  frames.delete(id);
-  paint();
-  assert.equal(session.getState().zoomMode, 'digital');
-  assert.equal(previewElement.style['--camera-image-height'], '100%');
-  assert.equal(canvas.draws[1][3], 2 * canvas.draws[0][3]);
-  assert.equal(canvas.draws[1][4], 2 * canvas.draws[0][4]);
-  assert.equal(recorders.length, 1);
-  assert.equal(calls.length, 1);
-  const stopping = session.close();
-  recorders[0].deliver();
-  await stopping;
-});
-
-test('uncropped 9:16 sources can use 0.5× with fields and keep that preset across metadata changes', async () => {
-  const { session, previewElement, canvases, recorders } = harness();
-  previewElement.videoWidth = 0;
-  await session.enableCamera();
-  await session.setZoom(0.5);
-  previewElement.videoWidth = 960;
+  assert.equal(session.getState().wideAvailable, false);
+  await assert.rejects(session.setZoom('0.5'), /угол/);
+  assert.equal(session.getState().zoom, 1);
+  previewElement.videoWidth = 720;
   previewElement.videoHeight = 1280;
   previewElement.dispatchEvent(new Event('loadedmetadata'));
-  assert.equal(previewElement.style['--camera-image-height'], '50%');
-  previewElement.videoWidth = 720;
-  previewElement.dispatchEvent(new Event('resize'));
-  assert.equal(session.getState().zoom, 0.5);
-  assert.equal(previewElement.style['--camera-image-width'], '50%');
-  assert.equal(previewElement.style['--camera-image-height'], '50%');
+  assert.equal(previewElement.style['--camera-image-height'], '100%');
   session.startRecording();
-  assert.deepEqual(canvases[0].draws[0], [previewElement, 180, 320, 360, 640]);
-  assert.deepEqual(canvases[0].fills[0], [0, 0, 720, 1280]);
+  assert.deepEqual(canvases[0].draws[0], [previewElement, 0, 0, 720, 1280]);
+  assert.deepEqual(canvases[0].fills, []);
   const closing = session.close();
   recorders[0].deliver();
   await closing;
@@ -314,7 +282,7 @@ test('device zoom is relative to its actual starting setting and rapid taps rest
   await session.close();
 });
 
-test('ignored device constraints fall back to framing while rejected PTZ permission still opens the camera', async () => {
+test('ignored device zoom is unavailable while rejected PTZ permission still opens the camera', async () => {
   const calls = [];
   const applied = [];
   const video = Object.assign(new Track('video'), {
@@ -336,34 +304,24 @@ test('ignored device constraints fall back to framing while rejected PTZ permiss
   assert.deepEqual(calls[0].video.facingMode, { exact: 'user' });
   assert.equal(calls[1].video.zoom, undefined);
   assert.deepEqual(calls[1].video.facingMode, { ideal: 'user' });
-  await session.setZoom(0.5);
-  assert.equal(applied.length, 2);
-  assert.equal(session.getState().zoomMode, 'digital');
-  assert.equal(previewElement.style['--camera-image-height'], '50%');
+  await assert.rejects(session.setZoom(0.5), /не подтвердила/);
+  assert.ok(applied.length >= 2);
+  assert.equal(session.getState().wideAvailable, false);
+  assert.equal(previewElement.style['--camera-image-height'], '100%');
   await session.setZoom(1);
   assert.equal(previewElement.style['--camera-image-height'], '100%');
   await session.close();
 });
 
-test('partial hardware widening is supplemented only by the remaining scale factor', async () => {
-  let actual = 2;
+test('insufficient hardware range cannot impersonate 0.5×', async () => {
   const video = Object.assign(new Track('video'), {
     getCapabilities: () => ({ zoom: { min: 1.5, max: 3, step: 0.5 } }),
-    getSettings: () => ({ zoom: actual }),
-    async applyConstraints({ advanced }) { actual = advanced[0].zoom; },
+    getSettings: () => ({ zoom: 2 }), applyConstraints() { assert.fail('impossible preset'); },
   });
-  const { session, previewElement } = harness({
-    mediaDevices: { getUserMedia: async () => new Stream([new Track('audio'), video]) },
-  });
+  const { session } = harness({ mediaDevices: { getUserMedia: async () => new Stream([new Track('audio'), video]) } });
   await session.enableCamera();
-  await session.setZoom(0.5);
-  assert.equal(actual, 1.5);
-  assert.equal(session.getState().zoomMode, 'digital');
-  const renderFactor = parseFloat(previewElement.style['--camera-image-height']) / 100;
-  assert.ok(Math.abs((actual / 2) * renderFactor - 0.5) < 1e-9);
-  await session.setZoom(1);
-  assert.equal(actual, 2);
-  assert.equal(previewElement.style['--camera-image-height'], '100%');
+  assert.equal(session.getState().wideAvailable, false);
+  await assert.rejects(session.setZoom(0.5), /угол/);
   await session.close();
 });
 
@@ -401,4 +359,155 @@ test('temporary mute is visible, prevents a silent start, and does not break an 
   const end = session.close();
   recorders[0].deliver();
   await end;
+});
+
+test('Full HD portrait tracks are recorded directly at negotiated fps and survive recorder release', async () => {
+  let actualFps = 30;
+  const requested = [];
+  const camera = Object.assign(new Track('video'), {
+    getSettings: () => ({ width: 1080, height: 1920, frameRate: actualFps }),
+    getConstraints: () => ({ zoom: true, advanced: [{ zoom: 1 }] }),
+    async applyConstraints(c) {
+      assert.ok(!('zoom' in c) && !c.advanced, 'format constraints omit PTZ');
+      requested.push(c.frameRate.ideal);
+      actualFps = c.frameRate.ideal;
+    },
+  });
+  const { session, previewElement, recorders, canvases, errors } = harness({
+    mediaDevices: { async getUserMedia() { return new Stream([new Track('audio'), camera]); } },
+  });
+  previewElement.videoWidth = 1080;
+  previewElement.videoHeight = 1920;
+  await session.enableCamera();
+  await session.setFrameRate(60);
+  assert.deepEqual(requested, [60]);
+  assert.equal(session.getState().sourceFps, 60);
+  session.startRecording();
+  const [rec] = recorders;
+  assert.equal(canvases.length, 0);
+  assert.equal(rec.stream.getVideoTracks()[0], camera);
+  assert.ok(rec.videoBitsPerSecond >= 20_000_000);
+  await assert.rejects(session.setFrameRate(30), /между дублями/);
+  previewElement.videoWidth = 1920;
+  previewElement.videoHeight = 1080;
+  previewElement.dispatchEvent(new Event('resize'));
+  assert.match(errors[0], /Ориентация/);
+  assert.equal(session.getState().recording, 'stopping');
+  const stopped = session.stopRecording();
+  rec.deliver();
+  await stopped;
+  assert.equal(camera.readyState, 'live');
+  await session.close();
+});
+
+test('a 30 fps source stays at 30 fps in the compositor after choosing 60', async () => {
+  const calls = [];
+  const camera = Object.assign(new Track('video'), {
+    getSettings: () => ({ width: 1280, height: 720, frameRate: 30 }),
+    async applyConstraints(c) { calls.push(c); if (c.frameRate.min > 30) throw Error(); },
+  });
+  const { session, recorders, canvases } = harness({
+    mediaDevices: { async getUserMedia() { return new Stream([new Track('audio'), camera]); } },
+  });
+  await session.enableCamera();
+  await session.setFrameRate(60);
+  assert.equal(calls.length, 2);
+  session.startRecording();
+  assert.equal(session.getState().frameRate, 60);
+  assert.equal(session.getState().sourceFps, 30);
+  assert.equal(session.getState().outputFps, 30);
+  assert.equal(canvases[0].fps, 30);
+  const done = session.close();
+  recorders[0].deliver();
+  await done;
+});
+
+test('a landscape source tries genuine extra sensor pixels only once with a frame rate floor', async () => {
+  const attempts = [];
+  const camera = Object.assign(new Track('video'), {
+    getSettings: () => ({ width: 1920, height: 1080, frameRate: 59.94 }),
+    getCapabilities: () => ({ width: { max: 3840 }, height: { max: 2160 } }),
+    async applyConstraints(c) { attempts.push(c); throw new DOMException('', 'OverconstrainedError'); },
+  });
+  const { session, previewElement } = harness({ frameRate: 60,
+    mediaDevices: { async getUserMedia() { return new Stream([new Track('audio'), camera]); } },
+  });
+  previewElement.srcObject = await session.enableCamera();
+  previewElement.dispatchEvent(new Event('loadedmetadata'));
+  await new Promise(resolve => setImmediate(resolve));
+  previewElement.dispatchEvent(new Event('resize'));
+  assert.equal(attempts.length, 1);
+  assert.ok(attempts[0].frameRate.min > 59);
+  assert.equal(attempts[0].height.min, 1920);
+  assert.equal(session.getState().cameraChanging, false);
+  assert.equal(session.getState().camera, true);
+  await session.close();
+});
+
+test('a restored 60 fps preference negotiates again if the initially chosen format only delivers 30', async () => {
+  let fps = 30;
+  const camera = Object.assign(new Track('video'), {
+    getSettings: () => ({ width: 1080, height: 1920, frameRate: fps }),
+    getCapabilities: () => ({ frameRate: { min: 24, max: 60 } }),
+    async applyConstraints(c) { assert.ok(c.frameRate.min > 59); fps = 59.94; },
+  });
+  const { session } = harness({ frameRate: 60, mediaDevices: {
+    async getUserMedia({ video }) {
+      assert.equal(video.frameRate.ideal, 60);
+      return new Stream([new Track('audio'), camera]);
+    },
+  } });
+  await session.enableCamera();
+  assert.equal(session.getState().sourceFps, 59.94);
+  assert.equal(session.getState().outputFps, 59.94);
+  await session.close();
+});
+
+test('switching sides and real lenses uses exact devices, recovers from failure, and preserves the mic', async () => {
+  const devices = [
+    { deviceId: 'self', label: 'Front Camera' },
+    { deviceId: 'rear', label: 'Back Wide Angle Camera' },
+    { deviceId: 'ultra', label: 'Back Ultra Wide Camera' },
+  ].map(device => ({ ...device, kind: 'videoinput' }));
+  const mic = new Track('audio');
+  const opens = [];
+  let rejectUltra = true;
+  const mediaDevices = {
+    async enumerateDevices() { return devices; },
+    async getUserMedia(c) {
+      opens.push(c);
+      const facing = c.video.facingMode.exact || c.video.facingMode.ideal;
+      const id = c.video.deviceId?.exact || (facing === 'user' ? 'self' : 'rear');
+      if (id === 'ultra' && rejectUltra) throw new DOMException('', 'NotReadableError');
+      const camera = Object.assign(new Track('video'), {
+        label: devices.find(d => d.deviceId === id).label, getSettings: () => ({ deviceId: id, facingMode: facing }),
+      });
+      return new Stream(c.audio ? [mic, camera] : [camera]);
+    },
+  };
+  const { session, recorders } = harness({ mediaDevices });
+  const selfie = await session.enableCamera();
+  await session.acquireVoice();
+  assert.equal(session.getState().wideAvailable, false);
+  await session.setFacingMode('environment');
+  assert.equal(selfie.getVideoTracks()[0].readyState, 'ended');
+  assert.equal(session.getState().facingMode, 'environment');
+  assert.equal(session.getState().wideAvailable, true);
+  await assert.rejects(session.setZoom(0.5), /заняты/);
+  assert.equal(session.getState().stream.getVideoTracks()[0].getSettings().deviceId, 'rear');
+  rejectUltra = false;
+  await session.setZoom(0.5);
+  assert.equal(session.getState().zoom, 0.5);
+  assert.equal(session.getState().stream.getVideoTracks()[0].getSettings().deviceId, 'ultra');
+  assert.equal(session.getState().stream.getAudioTracks()[0], mic);
+  session.startRecording();
+  await assert.rejects(session.setZoom(1), /между дублями/);
+  const done = session.stopRecording();
+  recorders[0].deliver();
+  await done;
+  await session.setZoom(1);
+  assert.ok(opens.slice(1).every(c => c.audio === false && c.video.facingMode.exact === 'environment'));
+  assert.equal(session.getState().stream.getVideoTracks()[0].getSettings().deviceId, 'rear');
+  assert.equal(mic.readyState, 'live');
+  await session.close();
 });

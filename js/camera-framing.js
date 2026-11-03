@@ -1,15 +1,17 @@
-const OUTPUT_WIDTH = 720;
-const OUTPUT_HEIGHT = 1280;
+const FRAME_WIDTH = 720;
+const FRAME_HEIGHT = 1280;
+const near = (a, b) => Math.abs(a - b) < 0.0001;
 
-// Browser-reported zoom units may use a device-specific origin. Treat the
-// initial setting as our 1× and verify changes on the track before reporting them.
-function deviceZoom(track) {
+function hardwareRange(track) {
   try {
     const range = track?.getCapabilities?.().zoom;
     const base = track?.getSettings?.().zoom;
-    if (!track?.applyConstraints || !range || !Number.isFinite(base) ||
-        !(range.min > 0 && range.max > range.min && base >= range.min && base <= range.max)) return null;
-    return { ...range, base };
+    if (!track?.applyConstraints || !range || !(base > 0) ||
+        !(range.min > 0 && range.min <= base / 2 && base <= range.max)) return null;
+    // A camera may expose zoom but only support integer steps (or only zoom in).
+    const steps = (base / 2 - range.min) / range.step;
+    if (range.step > 0 && !near(steps, Math.round(steps))) return null;
+    return { base };
   } catch {
     return null;
   }
@@ -17,39 +19,30 @@ function deviceZoom(track) {
 
 export function createCameraFraming(source, changed) {
   let track = null;
-  let device = null;
+  let hardware = null;
   let zoom = 1;
-  let mode = 'digital';
-  let scale = 1;
   let queue = Promise.resolve();
 
-  // Size the full source before the output clips its edges. Scaling an already
-  // cropped 1× image would throw away peripheral pixels that fit at 0.5×.
-  function imageSize() {
-    const width = source?.videoWidth, height = source?.videoHeight;
-    if (!width || !height) return null;
-    const factor = Math.max(OUTPUT_WIDTH / width, OUTPUT_HEIGHT / height) * scale;
-    return { width: width * factor, height: height * factor };
+  // The lens controls the field of view. Preview and export always cover 9:16.
+  function imageSize(width, height) {
+    if (!source?.videoWidth || !source.videoHeight) return null;
+    const factor = Math.max(width / source.videoWidth, height / source.videoHeight);
+    return { width: source.videoWidth * factor, height: source.videoHeight * factor };
   }
   function state() {
-    return { zoom, zoomMode: mode };
+    return { zoom, zoomMode: 'device', hardwareWideAvailable: Boolean(hardware) };
   }
   function sizePreview() {
-    const size = imageSize();
-    source?.style?.setProperty('--camera-image-width', size ? size.width / OUTPUT_WIDTH * 100 + '%' : '100%');
-    source?.style?.setProperty('--camera-image-height', size ? size.height / OUTPUT_HEIGHT * 100 + '%' : '100%');
+    const size = imageSize(FRAME_WIDTH, FRAME_HEIGHT);
+    source?.style?.setProperty('--camera-image-width', size ? size.width / FRAME_WIDTH * 100 + '%' : '100%');
+    source?.style?.setProperty('--camera-image-height', size ? size.height / FRAME_HEIGHT * 100 + '%' : '100%');
   }
-  function apply(preset, nextMode, digitalScale) {
-    zoom = preset;
-    mode = nextMode;
-    scale = digitalScale;
-    sizePreview();
-  }
-  function attach(nextTrack) {
+  function attach(nextTrack, preset = 1) {
     track = nextTrack;
-    device = deviceZoom(track);
+    zoom = preset;
+    hardware = preset === 1 ? hardwareRange(track) : null;
     queue = Promise.resolve();
-    apply(1, device ? 'device' : 'digital', 1);
+    sizePreview();
   }
   function refresh() {
     if (!track) return;
@@ -59,32 +52,39 @@ export function createCameraFraming(source, changed) {
   source?.addEventListener?.('loadedmetadata', refresh);
   source?.addEventListener?.('resize', refresh);
 
-  async function change(selected, preset) {
-    if (selected !== track || !track || track.readyState !== 'live') return;
-    let factor = 1;
-    if (device) {
-      const { base, min, max, step } = device;
-      const requested = base * preset;
-      let target = Math.min(max, Math.max(min, requested));
-      if (step > 0 && target !== max && target !== base) {
-        target = min + Math.floor((target - min) / step + 1e-6) * step;
-      }
-      // Some implementations use the advanced Image Capture constraint, some
-      // the basic form. Do not mix it with acquisition (width/height) constraints.
-      for (const constraints of [{ advanced: [{ zoom: target }] }, { zoom: { exact: target } }]) {
-        if (selected !== track || track.readyState !== 'live') return;
-        if (Math.abs(target - track.getSettings().zoom) < 1e-6) break;
-        try { await track.applyConstraints(constraints); }
-        catch { /* Try the other form, then use the actual reported setting. */ }
-      }
-      if (selected !== track || track.readyState !== 'live') return;
-      factor = track.getSettings().zoom / base;
-      if (!Number.isFinite(factor) || factor <= 0) {
-        throw new Error('Камера не сообщила применённый масштаб. Попробуйте ещё раз.');
-      }
+  async function applyDeviceZoom(selected, target) {
+    // Prefer preserving acquisition settings (in particular FPS). Some browsers
+    // only process Image Capture constraints when sent independently.
+    const { zoom: oldZoom, advanced = [], ...capture } = selected.getConstraints?.() ?? {};
+    const keep = advanced.map(({ zoom, ...rest }) => rest).filter(item => Object.keys(item).length);
+    const basicZoom = { zoom: { exact: target } };
+    const requests = [];
+    if (Object.keys(capture).length || keep.length) {
+      requests.push({ ...capture, advanced: [...keep, { zoom: target }] },
+        { ...capture, ...basicZoom, ...(keep.length ? { advanced: keep } : {}) });
     }
-    const digitalScale = preset / factor;
-    apply(preset, device && Math.abs(digitalScale - 1) < 0.0001 ? 'device' : 'digital', digitalScale);
+    requests.push({ advanced: [{ zoom: target }] }, basicZoom);
+    for (const constraints of requests) {
+      if (selected !== track || selected.readyState !== 'live') return false;
+      if (near(selected.getSettings().zoom, target)) return true;
+      try { await selected.applyConstraints(constraints); }
+      catch { /* Try the next supported constraint form. */ }
+    }
+    return selected === track && near(selected.getSettings().zoom, target);
+  }
+  async function change(selected, preset) {
+    if (selected !== track || !track || track.readyState !== 'live' || zoom === preset) return;
+    if (!hardware) throw new Error('У этой камеры нет доступного режима 0,5× без полей.');
+    const { base } = hardware;
+    if (!await applyDeviceZoom(selected, base * preset)) {
+      if (selected !== track || selected.readyState !== 'live') return;
+      await applyDeviceZoom(selected, base * zoom);
+      if (selected !== track) return;
+      if (zoom === 1) hardware = null;
+      changed();
+      throw new Error('Камера не подтвердила переключение масштаба.');
+    }
+    zoom = preset;
     changed();
   }
   function setZoom(value) {
@@ -95,16 +95,11 @@ export function createCameraFraming(source, changed) {
     queue = result.catch(() => {});
     return result;
   }
-  function draw(context) {
-    const size = imageSize();
+  function draw(context, width = context.canvas?.width ?? FRAME_WIDTH, height = context.canvas?.height ?? FRAME_HEIGHT) {
+    const size = imageSize(width, height);
     if (source.readyState < 2 || !size) return;
-    const { width, height } = size;
-    if (width < OUTPUT_WIDTH || height < OUTPUT_HEIGHT) {
-      context.fillStyle = '#101114';
-      context.fillRect(0, 0, OUTPUT_WIDTH, OUTPUT_HEIGHT);
-    }
-    context.drawImage(source, (OUTPUT_WIDTH - width) / 2, (OUTPUT_HEIGHT - height) / 2, width, height);
+    context.drawImage(source, (width - size.width) / 2, (height - size.height) / 2, size.width, size.height);
   }
 
-  return { attach, state, setZoom, draw, width: OUTPUT_WIDTH, height: OUTPUT_HEIGHT };
+  return { attach, state, setZoom, draw, width: FRAME_WIDTH, height: FRAME_HEIGHT };
 }

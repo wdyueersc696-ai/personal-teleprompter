@@ -4,7 +4,7 @@ import { createVoiceScroll } from './voice-scroll.js';
 import { createTakeLibrary } from './take-library.js';
 import { formatClock } from './teleprompter-model.js';
 
-export function createStudio({ view, viewport, article, pauseReading, resumeTempo, onVoiceStart, onRecordingChange,
+export function createStudio({ view, viewport, article, frameRate, saveFrameRate, pauseReading, resumeTempo, onVoiceStart, onRecordingChange,
   seek, finishReading, notify, updateWake, reveal }) {
   const id = name => document.getElementById(name);
   const camera = id('camera-toggle');
@@ -17,6 +17,8 @@ export function createStudio({ view, viewport, article, pauseReading, resumeTemp
   const promptToggle = id('prompt-toggle');
   const optionsToggle = id('camera-options-toggle');
   const zoomControls = id('camera-zoom');
+  const fpsControl = id('camera-fps');
+  const facingControl = id('camera-facing');
   let opening = false;
   let cameraEpoch = 0;
   let voiceEpoch = 0;
@@ -34,6 +36,7 @@ export function createStudio({ view, viewport, article, pauseReading, resumeTemp
     if (voiceOn) stopVoice();
   } });
   const capture = createCaptureSession({
+    frameRate,
     previewElement: preview,
     onChange: render,
     onResult(blob) {
@@ -114,21 +117,35 @@ export function createStudio({ view, viewport, article, pauseReading, resumeTemp
         if (preview.srcObject === stream) notify('Не удалось показать превью. Выключите и снова включите камеру.');
       });
     }
-    preview.classList.toggle('selfie', mirroredPreview);
+    const mirrorOn = mirroredPreview && state.facingMode !== 'environment';
+    preview.classList.toggle('selfie', mirrorOn);
     if (state.camera) {
-      const input = preview.videoWidth ? ' · Вход камеры ' + preview.videoWidth + '×' + preview.videoHeight : '';
-      const framing = state.zoom !== 0.5 ? '' : state.zoomMode === 'device'
-        ? ' · 0,5× средствами камеры' : ' · 0,5× с программным масштабированием';
-      id('capture-info').textContent = 'Файл 720×1280 · до 30 кадр/с' + input + framing;
+      const fps = rate => Number(rate.toFixed(1)).toLocaleString('ru-RU');
+      const sourceSize = state.sourceWidth && state.sourceHeight ? state.sourceWidth + '×' + state.sourceHeight : '';
+      const sourceRate = state.sourceFps ? fps(state.sourceFps) + ' кадр/с' : 'частота неизвестна';
+      const limited = state.frameRate === 60 && state.sourceFps > 0 && state.sourceFps < 59 ?
+        ' При этих настройках 60 кадр/с недоступны.' : '';
+      id('capture-info').textContent = state.outputWidth ? 'Запись: ' + state.outputWidth + '×' + state.outputHeight +
+        ' · до ' + fps(state.outputFps) + ' кадр/с. Камера: ' +
+        [sourceSize, sourceRate].filter(Boolean).join(' · ') + '.' + limited : 'Определяю параметры камеры…';
+      id('wide-info').textContent = state.wideAvailable
+        ? (state.wideRequiresSwitch ? 'Объектив можно менять до записи.' : '0,5× доступно на этой камере.')
+        : 'Для этой камеры браузер не предоставил 0,5×.' +
+          (state.facingMode !== 'environment' && state.canFlip ? ' Попробуйте заднюю камеру.' : '');
     }
+    fpsControl.value = String(state.frameRate);
+    facingControl.value = state.facingMode;
+    fpsControl.disabled = active || state.cameraChanging;
+    facingControl.disabled = active || state.cameraChanging || !state.canFlip;
     mirror.textContent = state.camera ? 'Зеркало превью' : 'Зеркало';
-    mirror.setAttribute('aria-pressed', String(state.camera ? mirroredPreview : view.classList.contains('is-mirrored')));
+    mirror.disabled = state.camera && state.facingMode === 'environment';
+    mirror.setAttribute('aria-pressed', String(state.camera ? mirrorOn : view.classList.contains('is-mirrored')));
     camera.setAttribute('aria-pressed', String(state.camera));
     camera.disabled = active;
     id('camera-off').disabled = active;
     camera.textContent = opening ? 'Отменить запрос' : state.camera ? 'Выкл. камеру' : 'Камера';
     record.hidden = !state.camera && !active;
-    record.disabled = state.recording === 'stopping' || (!active && preview.readyState < 2);
+    record.disabled = state.recording === 'stopping' || (!active && (state.cameraChanging || preview.readyState < 2));
     record.textContent = ({ starting: 'Отменить старт', recording: 'Остановить запись',
       stopping: 'Завершаю…', idle: 'Начать запись' })[state.recording];
     record.setAttribute('aria-pressed', String(running));
@@ -144,6 +161,9 @@ export function createStudio({ view, viewport, article, pauseReading, resumeTemp
     for (const button of zoomControls.querySelectorAll('[data-zoom]')) {
       const preset = button.dataset.zoom;
       button.setAttribute('aria-pressed', String(preset === String(state.zoom)));
+      button.disabled = state.cameraChanging || (active && state.wideRequiresSwitch)
+        || (preset === '0.5' ? !state.wideAvailable : !state.oneAvailable);
+      if (preset === '0.5') button.title = state.wideAvailable ? 'Широкий угол 0,5×' : '0,5× недоступно для этой камеры';
     }
     if (running && timer === null) {
       updateClock();
@@ -236,6 +256,17 @@ export function createStudio({ view, viewport, article, pauseReading, resumeTemp
     return true;
   }
   camera.addEventListener('click', toggleCamera);
+  fpsControl.addEventListener('change', async () => {
+    const value = Number(fpsControl.value);
+    try { await capture.setFrameRate(value); saveFrameRate(capture.getState().frameRate); }
+    catch (error) { if (error.name !== 'AbortError') notify(error.message); }
+    finally { render(); }
+  });
+  facingControl.addEventListener('change', async () => {
+    try { await capture.setFacingMode(facingControl.value); }
+    catch (error) { if (error.name !== 'AbortError') notify(error.message); }
+    finally { render(); }
+  });
   zoomControls.addEventListener('click', async event => {
     const button = event.target.closest('button[data-zoom]');
     if (!button) return;

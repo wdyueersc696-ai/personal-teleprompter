@@ -17,6 +17,7 @@ import {
 } from './settings-store.js';
 import { createScrollEngine } from './scroll-engine.js';
 import { createStudio } from './studio.js';
+import { createHomeEffects } from './home-effects.js';
 import { createReaderController, readerPrimaryAction } from './reader-controller.js';
 import {
   chooseServiceWorkerUpdateAction,
@@ -92,6 +93,7 @@ const PHASE_LABELS = {
 const readerControlPanels = [...document.querySelectorAll('[data-reader-controls]')];
 
 const appStorage = getSafeStorage(window);
+const homeEffects = createHomeEffects({ root: elements.setupView, storage: appStorage });
 const restored = loadAppState(appStorage);
 let appState = restored.state;
 let durationMs = estimateDurationMs(countWords(appState.script), appState.settings.wpm);
@@ -358,6 +360,7 @@ function enterReader(withCamera = false) {
     return;
   }
 
+  homeEffects.setActive(false);
   replaceState({ ...appState, script }, { save: false });
   persistNow();
   elements.readerText.textContent = appState.script;
@@ -387,6 +390,7 @@ async function leaveReader() {
   void wakeLock.setReadingActive(false);
   elements.readerView.hidden = true;
   elements.setupView.hidden = false;
+  homeEffects.setActive(true);
   applyTheme();
   showControls({ autoHide: false });
   const fullscreenElement = document.fullscreenElement ?? document.webkitFullscreenElement;

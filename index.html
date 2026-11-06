@@ -25,12 +25,14 @@
   <body data-theme="dark">
     <main id="app" class="app-shell">
       <section id="setup-view" class="setup-view" aria-labelledby="setup-title">
+        <div class="home-atmosphere" aria-hidden="true"><canvas id="silk-background"></canvas></div>
         <div class="setup-wrap">
           <header class="masthead">
             <a class="brand" href="./" aria-label="ReadReel — на главную"><img src="./icons/icon-source.svg" width="36" height="36" alt="">ReadReel</a>
             <div class="mast-tools">
               <button id="setup-takes" type="button" class="takes-link" hidden><svg class="home-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="7" width="16" height="14" rx="3"/><path d="M7 3.5h10M10 11l5 3-5 3z"/></svg>Дубли</button>
               <span id="connection-badge" class="connection-badge" aria-live="polite"><svg class="home-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="6.5" y="2.5" width="11" height="19" rx="3"/><path d="M10.5 18.3h3"/></svg><span>Локально</span></span>
+              <button id="background-toggle" class="motion-toggle" type="button" aria-label="Анимация фона" aria-pressed="true" title="Приостановить анимацию фона"><svg class="home-icon" viewBox="0 0 24 24" aria-hidden="true"><path class="motion-pause" d="M9 7v10m6-10v10"/><path class="motion-play" d="m9 6 9 6-9 6z"/></svg></button>
             </div>
           </header>
           <div class="script-desk">
@@ -46,7 +48,7 @@
               <img class="desk-cat" src="./icons/script-cat.svg" width="320" height="154" alt="">
             </div>
             <div class="desk-sheet">
-              <div class="script-column">
+              <div class="script-column surface-panel" data-magic-card>
                 <div class="pane-heading">
                   <svg class="home-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 5.5 4 4M4 20l4.3-.9L20 7.4a1.8 1.8 0 0 0 0-2.6l-.9-.9a1.8 1.8 0 0 0-2.6 0L4.9 15.7 4 20Z"/></svg><h2><label for="script-input">Текст сценария</label></h2>
                 </div>
@@ -55,14 +57,14 @@
                   <p class="save-note"><svg class="home-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="6.5" y="2.5" width="11" height="19" rx="3"/><path d="M10.5 18.3h3"/></svg><span id="save-indicator">Хранится на устройстве</span></p>
                 </div>
                 <div class="launch-block">
-                  <button id="shoot-button" class="home-action primary" type="button"><svg class="home-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="5.5" width="13" height="13" rx="3.3"/><path d="m15.5 10.1 5.2-3a.6.6 0 0 1 .9.5v8.8a.6.6 0 0 1-.9.5l-5.2-3"/></svg>Открыть камеру</button>
-                  <button id="start-button" class="home-action" type="button"><svg class="home-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6.7C9.6 4.9 6.5 4.4 3 5v13.5c3.5-.6 6.6-.1 9 1.7 2.4-1.8 5.5-2.3 9-1.7V5c-3.5-.6-6.6-.1-9 1.7Zm0 0v13.5"/></svg>Читать без камеры</button>
+                  <button id="shoot-button" class="home-action primary" type="button"><svg class="home-icon" data-icon="inline-start" viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="5.5" width="13" height="13" rx="3.3"/><path d="m15.5 10.1 5.2-3a.6.6 0 0 1 .9.5v8.8a.6.6 0 0 1-.9.5l-5.2-3"/></svg><span>Открыть камеру</span><svg class="home-icon action-arrow" data-icon="inline-end" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
+                  <button id="start-button" class="home-action" type="button"><svg class="home-icon" data-icon="inline-start" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6.7C9.6 4.9 6.5 4.4 3 5v13.5c3.5-.6 6.6-.1 9 1.7 2.4-1.8 5.5-2.3 9-1.7V5c-3.5-.6-6.6-.1-9 1.7Zm0 0v13.5"/></svg><span>Читать без камеры</span></button>
                 </div>
                 <details class="voice-hint"><summary>Как включить прокрутку голосом<svg class="home-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6.5 9.5 5.5 5.5 5.5-5.5"/></svg></summary>
                   <p>Откройте камеру и нажмите «Голос». При первом включении понадобится интернет, чтобы загрузить русскую модель и движок (около 51 МБ).</p>
                 </details>
               </div>
-              <section class="settings" aria-labelledby="settings-title">
+              <section class="settings surface-panel" data-magic-card aria-labelledby="settings-title">
                 <div class="pane-heading"><svg class="home-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h4m6 0h8M3 17h10m6 0h2"/><circle cx="10" cy="7" r="3"/><circle cx="16" cy="17" r="3"/></svg><h2 id="settings-title">Настройки чтения</h2></div>
                 <div class="reading-dials">
                   <div class="control-row">

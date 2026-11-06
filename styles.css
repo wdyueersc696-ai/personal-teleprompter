@@ -845,6 +845,22 @@ input[type="range"] {
   transform: translate(-50%, -50%);
 }
 .camera-preview.selfie { transform: translate(-50%, -50%) scaleX(-1); }
+.camera-status {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 28px;
+  color: #ccd1cf;
+  text-align: center;
+  font: 500 14px/1.5 system-ui, sans-serif;
+}
+.camera-status p { max-width: 28ch; margin: 0; }
+.has-camera:not(.camera-ready) .camera-preview { opacity: 0; }
+.has-camera:not(.camera-ready) .prompt-window { visibility: hidden; }
 .has-camera .camera-only { display: inline-flex; }
 .has-camera .reader-only,
 .has-camera .reader-status,

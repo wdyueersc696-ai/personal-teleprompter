@@ -113,9 +113,6 @@ const wakeLock = createWakeLockController({
 
 let readerController;
 let studio;
-// An untouched camera preview is a rehearsal. Each take can then begin at line one.
-// Once the reader positions or pauses the text, recording leaves that choice alone.
-let automaticCameraPreview = false;
 
 const scrollEngine = createScrollEngine({
   requestFrame: window.requestAnimationFrame.bind(window),
@@ -140,14 +137,9 @@ studio = createStudio({
   frameRate: appState.settings.frameRate,
   saveFrameRate: value => setSetting('frameRate', value),
   pauseReading: () => readerController.pause(),
-  onVoiceStart: () => { automaticCameraPreview = false; },
   resumeTempo: () => readerController.start(0),
   onRecordingChange(running) {
-    if (!running) { readerController.pause(); return; }
-    if (!automaticCameraPreview) return;
-    scrollEngine.restart();
-    readerController.reset();
-    readerController.start(appState.settings.countdown);
+    if (!running) readerController.pause();
   },
   seek: progress => scrollEngine.seek(progress),
   finishReading: () => readerController.finish(), updateWake, notify: showToast, reveal: () => showControls(),
@@ -351,10 +343,11 @@ function updateCameraTempoButton() {
   const button = byId('camera-auto-toggle');
   const phase = readerController.getState().phase;
   const active = phase === 'playing' || phase === 'countdown';
-  button.disabled = !elements.readerText.textContent.trim();
+  button.disabled = !elements.readerText.textContent.trim() || Boolean(studio?.cameraPending());
   button.setAttribute('aria-pressed', String(active));
-  button.title = active ? 'Поставить автопрокрутку на паузу' : 'Прокрутка по темпу';
+  button.title = phase === 'countdown' ? 'Отменить отсчёт' : active ? 'Приостановить прокрутку' : 'Запустить прокрутку';
   button.setAttribute('aria-label', button.title + ' · ' + appState.settings.wpm + ' слов/мин');
+  byId('camera-play-label').textContent = phase === 'countdown' ? 'Стоп' : active ? 'Пауза' : 'Пуск';
 }
 
 function enterReader(withCamera = false) {
@@ -368,25 +361,18 @@ function enterReader(withCamera = false) {
   replaceState({ ...appState, script }, { save: false });
   persistNow();
   elements.readerText.textContent = appState.script;
-  automaticCameraPreview = false;
-  studio.render();
+  scrollEngine.pause();
+  readerController.reset();
+  // Select the camera layout synchronously, before making the reader visible.
+  if (withCamera) void studio.toggleCamera();
+  else studio.render();
   elements.setupView.hidden = true;
   elements.readerView.hidden = false;
   applyTheme();
-  scrollEngine.pause();
   scrollEngine.restart();
-  readerController.reset();
   renderProgress(0);
 
-  if (withCamera) {
-    void studio.toggleCamera().then(opened => {
-      if (opened && script.trim() && !elements.readerView.hidden && !studio.following()
-          && readerController.getState().phase === 'idle') {
-        automaticCameraPreview = true;
-        readerController.start(appState.settings.countdown);
-      }
-    });
-  } else {
+  if (!withCamera) {
     requestElementFullscreen(document.documentElement).then(result => {
       elements.installHint.hidden = !shouldShowInstallHint(result, isStandalone());
     });
@@ -409,14 +395,15 @@ async function leaveReader() {
 }
 
 function togglePlayback() {
-  automaticCameraPreview = false;
-  if (!elements.readerText.textContent.trim()) return;
+  if (!elements.readerText.textContent.trim() || studio.cameraPending()) return;
   if (studio.following()) studio.stopVoice();
   const phase = readerController.getState().phase;
   if (phase === 'finished') {
     scrollEngine.restart();
     readerController.reset();
     readerController.start(0);
+  } else if (phase === 'idle') {
+    readerController.start(appState.settings.countdown);
   } else {
     readerController.toggle();
   }
@@ -424,8 +411,7 @@ function togglePlayback() {
 }
 
 function restartReading() {
-  automaticCameraPreview = false;
-  if (!elements.readerText.textContent.trim()) return;
+  if (!elements.readerText.textContent.trim() || studio.cameraPending()) return;
   if (studio.following()) studio.stopVoice();
   scrollEngine.restart();
   readerController.reset();
@@ -438,7 +424,6 @@ function reconcileSeekState(progress) {
 }
 
 function seekBy(milliseconds) {
-  automaticCameraPreview = false;
   if (durationMs <= 0) return;
   const next = scrollEngine.seek(currentProgress + (milliseconds / durationMs));
   reconcileSeekState(next);
@@ -504,7 +489,6 @@ function handleManualScroll() {
   // Scroll events from programmatic writes can arrive after the next frame.
   if (Math.abs(currentProgress * distance - elements.readerScroll.scrollTop) < 1) return;
   if (applyingScroll && !studio.following()) return;
-  automaticCameraPreview = false;
   const next = scrollEngine.seek(elements.readerScroll.scrollTop / distance);
   reconcileSeekState(next);
   studio.userMoved();
@@ -567,7 +551,6 @@ elements.readerStage.addEventListener('pointermove', () => showControls());
 elements.readerScroll.addEventListener('scroll', handleManualScroll, { passive: true });
 
 elements.progressInput.addEventListener('input', () => {
-  automaticCameraPreview = false;
   const next = scrollEngine.seek(Number(elements.progressInput.value) / 1_000);
   reconcileSeekState(next);
   studio.userMoved();

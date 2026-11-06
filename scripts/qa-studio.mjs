@@ -166,9 +166,23 @@ async function checkStudio({ chromium, browser, dir, appUrl }) {
   page.on('pageerror', e => errors.push(e.message));
   await page.addInitScript(() => {
     // Observe device/recorder track IDs without replacing audio or ASR output.
-    window.captureAudit = { audioRequests: 0, audioIds: [], recordedAudio: [], began: 0, ended: 0, videoConstraints: null };
+    window.captureAudit = { audioRequests: 0, audioIds: [], recordedAudio: [], began: 0, ended: 0, videoConstraints: null, entryFrames: [] };
+    document.addEventListener('click', event => {
+      if (!event.target.closest('#shoot-button')) return;
+      const frames = window.captureAudit.entryFrames = [];
+      const started = performance.now();
+      const sample = () => {
+        const view = document.querySelector('#reader-view');
+        frames.push({ camera: view.classList.contains('has-camera'), hidden: view.hidden,
+          legacyPanel: getComputedStyle(document.querySelector('.reader-bottom')).display !== 'none' });
+        if (!view.hidden && !view.classList.contains('camera-ready') && performance.now() - started < 10000) requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+    }, true);
     const get = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
     navigator.mediaDevices.getUserMedia = async c => {
+      // Make the permission wait visible, so a one-frame legacy-reader flash fails QA.
+      if (c.video) await new Promise(resolve => setTimeout(resolve, 250));
       // Some phones return landscape camera frames even in a portrait viewport.
       const stream = await get(c.video ? { ...c, video: { width: { exact: 1280 }, height: { exact: 720 } } } : c);
       // The fixed-focal-length input has no device zoom.
@@ -198,6 +212,9 @@ async function checkStudio({ chromium, browser, dir, appUrl }) {
   await page.locator('#script-input').fill('');
   await page.locator('#shoot-button').click();
   await page.locator('#record-button:enabled').waitFor();
+  const entryFrames = await page.evaluate(() => window.captureAudit.entryFrames);
+  assert.ok(entryFrames.length > 1);
+  assert.ok(entryFrames.every(frame => !frame.hidden && frame.camera && !frame.legacyPanel), 'camera entry flashed the legacy reader');
   assert.equal(await page.locator('#voice-toggle').isDisabled(), true);
   assert.equal(await page.locator('#camera-auto-toggle').isDisabled(), true);
   const fixedLens = await testFixedLens(page, dir);
@@ -224,13 +241,18 @@ async function checkStudio({ chromium, browser, dir, appUrl }) {
   await page.locator('#prompt-toggle').click();
   if (process.env.QA_CAMERA_SCREENSHOT) await page.screenshot({ path: process.env.QA_CAMERA_SCREENSHOT });
   assert.equal(await voice.getAttribute('aria-checked'), 'false');
-  // Camera entry starts a rehearsal at the saved WPM before recording.
-  await page.waitForFunction(() => document.querySelector('#reader-scroll').scrollTop > 5);
-  assert.equal(await page.locator('#camera-auto-toggle').getAttribute('aria-pressed'), 'true');
+  // Camera and recording entry must wait for an explicit playback action.
+  await page.waitForTimeout(500);
+  assert.ok(await scroll.evaluate(el => el.scrollTop < 2), 'camera entry started scrolling');
+  assert.equal(await page.locator('#camera-auto-toggle').getAttribute('aria-pressed'), 'false');
   await record.click();
   await indicator.waitFor({ state: 'visible' });
+  await page.waitForTimeout(500);
+  assert.equal(await page.locator('#reader-view').getAttribute('data-phase'), 'idle');
+  assert.ok(await scroll.evaluate(el => el.scrollTop < 2), 'recording started scrolling');
+  await page.locator('#camera-auto-toggle').click();
   assert.equal(await page.locator('#reader-view').getAttribute('data-phase'), 'countdown');
-  assert.ok(await scroll.evaluate(el => el.scrollTop < 2), 'take did not restart from the beginning');
+  assert.ok(await scroll.evaluate(el => el.scrollTop < 2), 'countdown moved the first line');
   await page.waitForFunction(() => document.querySelector('#reader-view').dataset.phase === 'playing');
   const measured = await page.locator('#progress-input').evaluate(async input => {
     const start = performance.now(), progress = Number(input.value);
@@ -279,7 +301,7 @@ async function checkStudio({ chromium, browser, dir, appUrl }) {
   assert.equal(await auto.getAttribute('aria-pressed'), 'false');
   const stopped = await scroll.evaluate(el => el.scrollTop);
   await page.waitForTimeout(350);
-  assert.ok(Math.abs(await scroll.evaluate(el => el.scrollTop) - stopped) <= 2, 'Темп failed to pause');
+  assert.ok(Math.abs(await scroll.evaluate(el => el.scrollTop) - stopped) <= 2, 'playback failed to pause');
   assert.equal(await indicator.isVisible(), true);
   await record.click();
   await indicator.waitFor({ state: 'hidden' });
@@ -330,7 +352,8 @@ async function checkStudio({ chromium, browser, dir, appUrl }) {
     await p.locator('#shoot-button').click();
     await p.waitForFunction(() => /разрешите/i.test(document.querySelector('#toast').textContent));
     assert.equal(await p.locator('#record-indicator').isVisible(), false);
-    assert.equal(await p.locator('#record-button').isVisible(), false);
+    assert.equal(await p.locator('#record-button').isDisabled(), true);
+    assert.equal(await p.locator('#camera-retry').isVisible(), true);
     await p.locator('#back-button').click();
     await p.locator('#setup-view').waitFor({ state: 'visible' });
   } finally { await refused.close(); }

@@ -128,6 +128,10 @@
         <div id="reader-stage" class="reader-stage">
           <div class="camera-frame">
             <video id="camera-preview" class="camera-preview" muted autoplay playsinline hidden aria-label="Вид с камеры"></video>
+            <div id="camera-status" class="camera-status" hidden>
+              <p id="camera-status-text" role="status">Открываю камеру…</p>
+              <button id="camera-retry" type="button" class="mode-button" hidden>Повторить</button>
+            </div>
           </div>
           <div class="prompt-window">
             <div class="prompt-caption camera-only" aria-hidden="true"><i></i>Сценарий</div>
@@ -181,7 +185,7 @@
               <div class="reading-modes">
                 <button type="button" class="mode-button camera-only" id="camera-auto-toggle" aria-pressed="false" aria-label="Автопрокрутка по темпу" title="Автопрокрутка по темпу">
                   <svg class="studio-icon" viewBox="0 0 24 24" aria-hidden="true"><path class="tempo-play" d="m8 5 11 7-11 7z"/><path class="tempo-pause" d="M8 5v14m8-14v14"/></svg>
-                  <span>Темп</span>
+                  <span id="camera-play-label">Пуск</span>
                 </button>
                 <button type="button" class="mode-button" id="voice-toggle" role="switch" aria-checked="false" aria-label="Следовать за голосом" title="Следовать за голосом">
                   <svg class="studio-icon camera-only" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10v4m4-8v12m5-16v20m5-16v12m4-8v4"/></svg>

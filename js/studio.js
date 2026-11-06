@@ -4,13 +4,16 @@ import { createVoiceScroll } from './voice-scroll.js';
 import { createTakeLibrary } from './take-library.js';
 import { formatClock } from './teleprompter-model.js';
 
-export function createStudio({ view, viewport, article, frameRate, saveFrameRate, pauseReading, resumeTempo, onVoiceStart, onRecordingChange,
+export function createStudio({ view, viewport, article, frameRate, saveFrameRate, pauseReading, resumeTempo, onRecordingChange,
   seek, finishReading, notify, updateWake, reveal }) {
   const id = name => document.getElementById(name);
   const camera = id('camera-toggle');
   const record = id('record-button');
   const toggle = id('voice-toggle');
   const preview = id('camera-preview');
+  const cameraStatus = id('camera-status');
+  const cameraStatusText = id('camera-status-text');
+  const cameraRetry = id('camera-retry');
   const message = id('studio-message');
   const mirror = id('reader-mirror-button');
   const dock = view.querySelector('.studio-dock');
@@ -20,6 +23,11 @@ export function createStudio({ view, viewport, article, frameRate, saveFrameRate
   const fpsControl = id('camera-fps');
   const facingControl = id('camera-facing');
   let opening = false;
+  let cameraMode = false;
+  let cameraError = '';
+  let previewReady = false;
+  let previewFrame = null;
+  let previewVersion = 0;
   let cameraEpoch = 0;
   let voiceEpoch = 0;
   let voiceOn = false;
@@ -103,20 +111,63 @@ export function createStudio({ view, viewport, article, frameRate, saveFrameRate
     view.classList.toggle('camera-settings-open', open);
     optionsToggle.setAttribute('aria-expanded', String(open));
   }
+  function resetPreview() {
+    previewReady = false;
+    ++previewVersion;
+    if (previewFrame !== null) {
+      cancelAnimationFrame(previewFrame);
+      previewFrame = null;
+    }
+  }
+  function waitForPreview(state) {
+    if (previewReady) return;
+    if (opening || !state.camera || state.cameraChanging || cameraError) {
+      resetPreview();
+      return;
+    }
+    if (previewFrame !== null || preview.readyState < 2) return;
+    const version = previewVersion;
+    const stream = state.stream;
+    const confirm = () => {
+      if (version !== previewVersion) return;
+      previewFrame = null;
+      const latest = capture.getState();
+      if (!cameraMode || opening || !latest.camera || latest.cameraChanging ||
+          latest.stream !== stream || preview.srcObject !== stream || preview.readyState < 2) return;
+      previewReady = true;
+      render();
+    };
+    // readyState >= 2 means a frame is decoded. Commit the layout on the next
+    // paint, after synchronous metadata/format handlers have had time to run.
+    previewFrame = requestAnimationFrame(confirm);
+  }
+  function cameraPending() { return cameraMode && !previewReady; }
   function render(state = capture.getState()) {
     const active = state.recording !== 'idle';
     const running = state.recording === 'recording';
-    const cameraChanged = view.classList.contains('has-camera') !== state.camera;
-    view.classList.toggle('has-camera', state.camera);
+    const cameraChanged = view.classList.contains('has-camera') !== cameraMode;
+    view.classList.toggle('has-camera', cameraMode);
     view.classList.toggle('no-script', !article.textContent.trim());
     preview.hidden = !state.camera;
     const stream = state.camera ? state.stream : null;
     if (preview.srcObject !== stream) {
+      resetPreview();
       preview.srcObject = stream;
       if (stream) preview.play().catch(() => {
-        if (preview.srcObject === stream) notify('Не удалось показать превью. Выключите и снова включите камеру.');
+        if (preview.srcObject !== stream) return;
+        cameraError = 'Не удалось показать изображение с камеры. Попробуйте ещё раз.';
+        resetPreview();
+        render();
       });
     }
+    if (!state.camera) resetPreview();
+    waitForPreview(state);
+    const unavailable = cameraError || (!opening && !state.camera ? 'Камера недоступна. Попробуйте открыть её ещё раз.' : '');
+    view.classList.toggle('camera-ready', previewReady);
+    view.classList.toggle('camera-loading', cameraMode && !previewReady && !unavailable);
+    cameraStatus.hidden = !cameraPending();
+    cameraStatusText.textContent = unavailable || 'Открываю камеру…';
+    cameraRetry.hidden = !unavailable || opening;
     const mirrorOn = mirroredPreview && state.facingMode !== 'environment';
     preview.classList.toggle('selfie', mirrorOn);
     if (state.camera) {
@@ -135,8 +186,8 @@ export function createStudio({ view, viewport, article, frameRate, saveFrameRate
     }
     fpsControl.value = String(state.frameRate);
     facingControl.value = state.facingMode;
-    fpsControl.disabled = active || state.cameraChanging;
-    facingControl.disabled = active || state.cameraChanging || !state.canFlip;
+    fpsControl.disabled = active || state.cameraChanging || cameraPending();
+    facingControl.disabled = active || state.cameraChanging || cameraPending() || !state.canFlip;
     mirror.textContent = state.camera ? 'Зеркало превью' : 'Зеркало';
     mirror.disabled = state.camera && state.facingMode === 'environment';
     mirror.setAttribute('aria-pressed', String(state.camera ? mirrorOn : view.classList.contains('is-mirrored')));
@@ -144,8 +195,8 @@ export function createStudio({ view, viewport, article, frameRate, saveFrameRate
     camera.disabled = active;
     id('camera-off').disabled = active;
     camera.textContent = opening ? 'Отменить запрос' : state.camera ? 'Выкл. камеру' : 'Камера';
-    record.hidden = !state.camera && !active;
-    record.disabled = state.recording === 'stopping' || (!active && (state.cameraChanging || preview.readyState < 2));
+    record.hidden = !cameraMode && !active;
+    record.disabled = state.recording === 'stopping' || (!active && (cameraPending() || !state.camera || state.cameraChanging));
     record.textContent = ({ starting: 'Отменить старт', recording: 'Остановить запись',
       stopping: 'Завершаю…', idle: 'Начать запись' })[state.recording];
     record.setAttribute('aria-pressed', String(running));
@@ -157,11 +208,12 @@ export function createStudio({ view, viewport, article, frameRate, saveFrameRate
       : state.camera && state.videoMuted ? 'Камера временно не передаёт изображение.' : '';
     id('reader-takes').disabled = active;
     toggle.setAttribute('aria-checked', String(voiceOn));
-    toggle.disabled = view.classList.contains('no-script');
+    toggle.disabled = view.classList.contains('no-script') || cameraPending();
+    id('camera-auto-toggle').disabled = view.classList.contains('no-script') || cameraPending();
     for (const button of zoomControls.querySelectorAll('[data-zoom]')) {
       const preset = button.dataset.zoom;
       button.setAttribute('aria-pressed', String(preset === String(state.zoom)));
-      button.disabled = state.cameraChanging || (active && state.wideRequiresSwitch)
+      button.disabled = cameraPending() || state.cameraChanging || (active && state.wideRequiresSwitch)
         || (preset === '0.5' ? !state.wideAvailable : !state.oneAvailable);
       if (preset === '0.5') button.title = state.wideAvailable ? 'Широкий угол 0,5×' : '0,5× недоступно для этой камеры';
     }
@@ -188,20 +240,31 @@ export function createStudio({ view, viewport, article, frameRate, saveFrameRate
     updateWake();
   }
 
+  function turnOffCamera() {
+    if (busy()) return;
+    ++cameraEpoch;
+    opening = false;
+    cameraMode = false;
+    cameraError = '';
+    resetPreview();
+    capture.disableCamera();
+  }
   async function toggleCamera() {
+    if (opening || (capture.getState().camera && !cameraError)) return turnOffCamera();
     const token = ++cameraEpoch;
-    if (opening || capture.getState().camera) {
-      opening = false;
-      capture.disableCamera();
-      return;
-    }
+    if (cameraError) capture.disableCamera();
     opening = true;
+    cameraMode = true;
+    cameraError = '';
+    pauseReading();
     render();
     try {
       await capture.enableCamera();
       return token === cameraEpoch && capture.getState().camera;
     }
-    catch (error) { if (token === cameraEpoch) notify(error.message); }
+    catch (error) {
+      if (token === cameraEpoch) { cameraError = error.message; notify(error.message); }
+    }
     finally { if (token === cameraEpoch) { opening = false; render(); } }
   }
 
@@ -229,7 +292,6 @@ export function createStudio({ view, viewport, article, frameRate, saveFrameRate
     const token = ++voiceEpoch;
     voiceOn = true;
     restoreTempo = capture.getState().camera && ['playing', 'countdown'].includes(view.dataset.phase);
-    onVoiceStart();
     pauseReading();
     try {
       follower.start();
@@ -246,8 +308,12 @@ export function createStudio({ view, viewport, article, frameRate, saveFrameRate
   async function close() {
     ++cameraEpoch;
     opening = false;
+    resetPreview();
     stopVoice();
     await capture.close();
+    cameraMode = false;
+    cameraError = '';
+    render();
   }
   function busy() { return capture.getState().recording !== 'idle'; }
   async function leave() {
@@ -256,6 +322,7 @@ export function createStudio({ view, viewport, article, frameRate, saveFrameRate
     return true;
   }
   camera.addEventListener('click', toggleCamera);
+  cameraRetry.addEventListener('click', toggleCamera);
   fpsControl.addEventListener('change', async () => {
     const value = Number(fpsControl.value);
     try { await capture.setFrameRate(value); saveFrameRate(capture.getState().frameRate); }
@@ -273,7 +340,7 @@ export function createStudio({ view, viewport, article, frameRate, saveFrameRate
     try { await capture.setZoom(button.dataset.zoom); }
     catch (error) { notify(error.message); }
   });
-  id('camera-off').addEventListener('click', toggleCamera);
+  id('camera-off').addEventListener('click', turnOffCamera);
   preview.addEventListener('loadeddata', () => render());
   preview.addEventListener('playing', () => render());
   promptToggle.addEventListener('click', () => setPromptVisible(view.classList.contains('prompt-hidden')));
@@ -309,7 +376,7 @@ export function createStudio({ view, viewport, article, frameRate, saveFrameRate
     if (document.hidden) void close();
   });
   return {
-    toggleCamera, leave, busy, render, library,
+    toggleCamera, leave, busy, render, library, cameraPending,
     setControlsHidden(hidden) {
       dock.inert = hidden && !capture.getState().camera && !busy() && !voiceOn;
     },
